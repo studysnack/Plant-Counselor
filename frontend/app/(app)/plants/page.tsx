@@ -14,6 +14,7 @@ import { STATUS_LABEL, STATUS_PILL, STATUS_COLOR_VAR, dominantStatus, isActive, 
 import { QK } from "@/lib/queryKeys";
 import { GardenSkeleton, PlantCardSkeleton } from "@/components/ui/Skeleton";
 import { GardenPlantVisual, GardenHarvestBasket, LAYER_H, POT_H, BASKET_VISUAL_H } from "@/components/plants/GardenPlantVisual";
+import { BudDetailDrawer } from "@/components/plants/BudDetailDrawer";
 
 // ── Garden pixel assets (Figma 05 Plant Pixel Assets) ──────
 
@@ -340,6 +341,7 @@ export default function PlantsPage() {
   const [selectedFruitPlantIds, setSelectedFruitPlantIds] = useState<Set<string>>(new Set());
   const [basketSearch, setBasketSearch] = useState("");
   const [historyFruit, setHistoryFruit] = useState<HarvestedFruit | null>(null);
+  const [gardenBudId, setGardenBudId] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const gardenZoomRef = useRef(gardenZoom);
   const pendingZoomScrollRef = useRef<{
@@ -520,7 +522,8 @@ export default function PlantsPage() {
   return (
     <div style={view === "garden"
       ? { position: "relative", height: "100vh", overflow: "hidden" }
-      : { padding: "32px 36px 48px", maxWidth: 1200, margin: "0 auto" }}>
+      : undefined}
+      className={view === "garden" ? undefined : "app-page app-page-wide"}>
       {/* Header */}
       <header className="animate-in" style={view === "garden" ? {
         position: "absolute", top: 22, left: 24, zIndex: 5,
@@ -557,7 +560,7 @@ export default function PlantsPage() {
           {view === "garden" ? (
             <GardenSkeleton />
           ) : (
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 14 }}>
+            <div className="responsive-card-grid">
               <PlantCardSkeleton /><PlantCardSkeleton /><PlantCardSkeleton />
               <PlantCardSkeleton /><PlantCardSkeleton /><PlantCardSkeleton />
             </div>
@@ -623,7 +626,7 @@ export default function PlantsPage() {
                     onSelect={() => effectiveSelectedIdx === i ? router.push(`/plants/${plant.id}`) : setSelectedIdx(i)}
                     onDetail={() => router.push(`/plants/${plant.id}`)}
                     onChat={() => openWith({ kind: "plant", id: plant.id })}
-                    onBudClick={(budId) => router.push(`/plants/${plant.id}?bud=${encodeURIComponent(budId)}`)}
+                    onBudClick={(budId) => setGardenBudId(budId)}
                   />
                 </div>;
               })}
@@ -652,12 +655,19 @@ export default function PlantsPage() {
             onFruitClick={(f) => setHistoryFruit(f)}
           />
         )}
+        {gardenBudId && (
+          <BudDetailDrawer
+            key={gardenBudId}
+            budId={gardenBudId}
+            onClose={() => setGardenBudId(null)}
+          />
+        )}
         </>
       )}
 
       {/* List view */}
       {!showLoading && plants.length > 0 && view === "list" && (
-        <div className="stagger" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 14 }}>
+        <div className="responsive-card-grid stagger">
           {filtered.map(p => (
             <PlantCard key={p.id} plant={p} buds={budsByPlant.get(p.id) ?? []}
               onClick={() => router.push(`/plants/${p.id}`)} onChat={() => openWith({ kind: "plant", id: p.id })} />
