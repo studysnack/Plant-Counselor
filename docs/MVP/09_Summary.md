@@ -1,5 +1,15 @@
 # Plant Counselor MVP — 전체 요약 및 핵심 흐름
 
+> **주의 (역사 자료)**: 이 문서는 2026-05-27 초기 MVP 스냅샷이다. 이후 구현이 크게
+> 바뀐 부분이 있어 아래 설명 중 일부는 현재 코드와 다르다. 최신 명세는 루트 `AGENTS.md`,
+> `docs/README.md`, 실제 코드를 우선한다. 대표적으로 바뀐 항목:
+> - **인증**: 닉네임/비밀번호(Argon2)·자체 JWT·쿠키 refresh → **Supabase Auth(Google OAuth) + ES256 JWKS 검증(HS256 fallback)** 로 교체. `/auth/*`·`/me/password` 엔드포인트 제거.
+> - **DB 계층**: SQLAlchemy/SQLite/psycopg2 → **supabase-py(PostgREST HTTP)** 로 교체.
+> - **봉우리 생애주기**: 7상태/`seed`/30% 임계가 아니라 **bud → flower → fruit → harvested / wilting → rot** (씨앗 제거, migration 004), 진행률 임계 **60% → flower, 85% → fruit, 수확 100%**.
+> - **AI 스킬**: 15개 → **20개** (캘린더 일정 4종 + `suggest_scope_change` 등 추가).
+> - **정원 그래픽**: 스프라이트 PNG 캐러셀 → **벡터 픽셀아트 보드**(`GardenPlantVisual.tsx`, 줌 0.5~2x + 스크롤, 수확 바구니).
+> 아래 본문은 당시 맥락 보존용이며 위 항목은 보정해 두었다.
+
 이 문서는 Plant Counselor MVP의 **모든 기능**과 **동작 흐름**을 한 문서에서 파악할 수 있도록 작성되었습니다.
 
 ---
@@ -40,8 +50,8 @@
 | 기능 | 설명 | 흐름 |
 |------|------|------|
 | 봉우리 생성 | AI가 타입(concern/schedule)·마감일 자동 결정 | "내일 면접 있어" → create_bud(type="schedule", deadline=내일) |
-| 진행률 업데이트 | 0~100%, 30/60/85% 임계에서 자동 상태 전이 | update_bud_progress(bud_id, 70) → 상태 flower로 자동 변경 |
-| 상태 변경 | 7가지 상태 간 수동/자동 전환 | update_bud_status(bud_id, "fruit") |
+| 진행률 업데이트 | 0~100%, 60/85% 임계에서 자동 상태 전이 | update_bud_progress(bud_id, 70) → 상태 flower로 자동 변경 |
+| 상태 변경 | 상태 간 수동/자동 전환 (bud → flower → fruit → harvested / wilting → rot) | update_bud_status(bud_id, "fruit") |
 | 수확(완료) | 봉우리 완료 처리 | harvest_bud(bud_id) |
 | 포기 | 봉우리 포기 처리 → rot 상태 | abandon_bud(bud_id) |
 | 마감일 설정 | YYYY-MM-DD 형식 | set_deadline(bud_id, "2026-06-15") |
@@ -60,7 +70,11 @@
 | SSE 스트리밍 | 토큰 단위 실시간 응답 + 스킬 호출 알림 |
 | 자동 캐시 갱신 | 스킬 실행 후 관련 쿼리 자동 무효화 |
 
-#### 15개 AI 스킬 상세
+#### AI 스킬 상세 (현재 20개)
+
+> 아래 표는 초기 15개만 담고 있다. 현재는 캘린더 일정 4종
+> (`create_calendar_event`, `list_calendar_events`, `update_calendar_event`,
+> `delete_calendar_event`)과 `suggest_scope_change`가 추가되어 **총 20개**다.
 
 | # | 스킬명 | 카테고리 | 파라미터 | 반환값 | 용도 |
 |---|--------|----------|----------|--------|------|
@@ -127,7 +141,7 @@
 | 요소 | 설명 |
 |------|------|
 | 식물 스프라이트 | 초록 곡선 줄기 + 둥근 잎 + 화분 합성 이미지 (140×240px) |
-| 봉우리 스프라이트 | 6종(seed/sprout/flower/fruit/wilted/harvested), 줄기 없이 요소만 |
+| 봉우리 스프라이트 | bud/flower/fruit/harvested/wilting 표현 (씨앗 seed는 migration 004로 제거), 줄기 없이 요소만 |
 | 슬롯 좌표 | 식물당 6개 가지 끝 좌표 — 봉우리 자동 배치 |
 | 배경 | 하늘 그라데이션(구름 포함) + 잔디 타일 + 흙 레이어 |
 | 인터랙션 | 가로 스크롤 캐러셀, 화살표 키 네비, 선택 강조, 봉우리 hover tooltip |
@@ -210,21 +224,21 @@
 ### 3.3 봉우리 진행률 변경 → 자동 상태 전이
 
 ```
-[1] 식물 상세 → 봉우리 드로어 → "+20%" 클릭
+[1] 식물 상세 → 봉우리 드로어 → 진행률 슬라이더로 70% 설정
      ↓
 [2] CustomEvent("pc-chat-prompt") 발생 → ChatPanel에서 수신
      ↓
-[3] AI에게 전달: "이 봉우리(id=...) 진행률을 40%로 올려줘"
+[3] AI에게 전달: "이 봉우리(id=...) 진행률을 70%로 올려줘"
      ↓
-[4] update_bud_progress(bud_id, 40)
+[4] update_bud_progress(bud_id, 70)
      ↓
 [5] BudService.update_progress():
-     ├── progress = 40 (0~100 클램프)
-     ├── 자동 전이 확인: 40 >= 30 → target = "bud"
-     ├── 현재 상태 "seed" ≠ "bud" → 전이!
-     ├── bud.status = "bud"
-     ├── BudHistory 기록: "seed → bud, 진행도 40% 자동 전이"
-     └── db.commit()
+     ├── progress = 70 (0~100 클램프)
+     ├── 자동 전이 확인: 70 >= 60 → target = "flower"
+     ├── 현재 상태 "bud" ≠ "flower" → 전이!
+     ├── bud.status = "flower"
+     ├── BudHistory 기록: "bud → flower, 진행도 70% 자동 전이"
+     └── (supabase-py 자동 커밋)
      ↓
 [6] invalidateQueries(["buds"]) → 드로어 갱신
 ```
@@ -237,7 +251,7 @@
 [2] 모든 사용자에 대해 scan_user(db, user_id):
      ├── user.garden_rules에서 wilting_days(7), rot_disappear_days(14) 로드
      │
-     ├── [자동 전이 1] 활성 봉우리(seed/bud/flower/fruit) 중
+     ├── [자동 전이 1] 활성 봉우리(bud/flower/fruit) 중
      │   last_progress_at이 7일 이상 전인 것:
      │   → status = "wilting"
      │   → BudHistory 기록
@@ -281,7 +295,7 @@
 |--------|----|----|-----------|--------|
 | users | id(ULID) | — | nickname(unique), password_hash, tone, garden_rules(JSON), encrypted_api_key | nickname |
 | plants | id | user_id→users | name, description, status(active/dormant/archived), stats(JSON) | (user_id,status), (user_id,last_activity_at) |
-| buds | id | user_id→users, plant_id→plants | title, detail, type(concern/schedule), status(7종), progress(0-100), deadline(date) | (user_id,status), (user_id,deadline), (plant_id,status) |
+| buds | id | user_id→users, plant_id→plants | title, detail, type(concern/schedule), status(bud/flower/fruit/harvested/wilting/rot), progress(0-100), deadline(date) | (user_id,status), (user_id,deadline), (plant_id,status) |
 | bud_histories | id | bud_id→buds | from_status, to_status, at, reason | (bud_id, at) |
 | conversations | id | user_id→users | scope(global/plant/bud/calendar), scope_id | unique(user_id,scope,scope_id) |
 | conversation_messages | id | conversation_id→conversations | role, text, skill_call(JSON), at | (conversation_id,at) |
@@ -384,7 +398,7 @@ GET    /health              → {status: "ok"}  (인증 불필요)
 | /plants | 식물 보기 | 인라인 식물 목록 카드 표시 |
 | /new | 새 봉우리 | AI 안내에 따라 단계별 봉우리 생성 |
 | /settings | 설정 | 설정 페이지로 이동 |
-| /skills | 스킬 목록 | 15개 AI 스킬 전체 표시 |
+| /skills | 스킬 목록 | AI 스킬(현재 20개) 전체 표시 |
 | /use <스킬명> | 스킬 실행 | 해당 스킬 직접 실행 |
 
 ### 대화 스코프

@@ -2,6 +2,9 @@
 
 > 모든 백엔드 Python 파일의 **함수·변수·결정 이유**를 빠짐없이 정리한 문서입니다.
 > 파일은 의존성 순서대로 정렬되어 있습니다(아래로 갈수록 위 계층에 의존).
+>
+> **DB 접근은 SQLAlchemy/psycopg2/alembic가 아니라 `supabase-py`(PostgREST HTTP)만 사용합니다.**
+> 테이블 스키마는 Supabase 마이그레이션이 관리하며, 백엔드는 service_role 키로 PostgREST REST API를 호출합니다.
 
 ---
 
@@ -9,10 +12,10 @@
 
 ```python
 class Settings(BaseSettings):
-    database_url: str = "sqlite:///./plant_counselor.db"
-    jwt_secret: str = "dev-secret"
-    jwt_access_ttl: int = 15        # minutes
-    jwt_refresh_ttl: int = 14       # days
+    database_url: str = "postgresql+psycopg2://...supabase.co:5432/postgres"  # 런타임 미사용
+    supabase_jwt_secret: str = ""
+    supabase_url: str = "https://mnqwrofidwotcsvsymnd.supabase.co"
+    supabase_service_role_key: str = ""
     llm_api_key: str = ""
     key_encryption_secret: str = "dev-encryption-key-32chars-padded"
     cors_allow_origin: str = "http://localhost:3000"
@@ -23,287 +26,116 @@ settings = Settings()
 ```
 
 - **역할**: 환경설정 단일 진입점. 모든 다른 모듈은 `from app.config import settings` 만 사용.
-- **`database_url`**: `sqlite://` 와 `postgres://` 둘 다 받게 두어 dev/prod 전환이 1줄 변경으로 가능.
-- **`jwt_access_ttl=15`**: 짧게 두고 refresh로 갱신하는 보안 권장 패턴.
-- **`jwt_refresh_ttl=14일`**: 모바일/노트북 사용 패턴(2주)에 맞춤. 더 길면 키 유출 시 위험.
+- **`supabase_url` / `supabase_service_role_key`**: 실제 DB 접근(`app/db/supa.py`)과 JWKS 검증에 사용. service_role 키는 RLS를 우회.
+- **`supabase_jwt_secret`**: JWT HS256 fallback 검증용(Supabase Dashboard의 Legacy JWT Secret).
+- **`database_url`**: 기본값만 남아 있고 **런타임에는 사용되지 않음**(psycopg2 직접 연결 폐기). PostgREST HTTP만 사용.
 - **`key_encryption_secret`**: Fernet 키 파생용. 32바이트가 아닌 임의 길이여도 `UserService._make_fernet` 에서 SHA-256 후 base64로 안전하게 가공.
-- **`cors_allow_origin`**: prod에서는 https 도메인 1개로 잠그도록 단일 문자열로 정의.
+- **`cors_allow_origin`**: 단일 origin 또는 콤마 구분 목록. `main._parse_cors_origins` 가 파싱하며 `*`/`null` 은 거부.
 
-## 2. `app/db/base.py`
-
-```python
-class Base(DeclarativeBase): pass
-```
-
-- **역할**: 모든 ORM 모델의 부모 클래스. SQLAlchemy 2.x `DeclarativeBase` 사용.
-- **왜 한 줄?** Alembic autogenerate가 `Base.metadata` 만 보면 되도록 분리. 모델 임포트가 누락되면 마이그레이션이 모델을 찾지 못함 → `app/db/models/__init__.py` 가 모든 모델을 import해서 메타데이터에 등록.
-
-## 3. `app/db/session.py`
+## 2. `app/db/supa.py`
 
 ```python
-engine = create_engine(
-    settings.database_url,
-    connect_args={"check_same_thread": False} if "sqlite" in settings.database_url else {},
-    pool_pre_ping=True,
-)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+@lru_cache(maxsize=1)
+def _make_client() -> Client:
+    return create_client(settings.supabase_url, settings.supabase_service_role_key)
+
+def get_client() -> Client:
+    return _make_client()
+
+DB = Client   # 시그니처에서 쓰는 타입 별칭
 ```
 
-- **`check_same_thread=False`**: SQLite는 기본적으로 한 connection을 만든 thread에서만 사용 가능. FastAPI는 thread pool에서 sync 코드를 돌리므로 비활성 필수.
-- **`pool_pre_ping=True`**: 커넥션이 죽었다가 재사용될 때 자동 reconnect. 장시간 idle 후에도 안정.
-- **`autocommit=False, autoflush=False`**: 명시적 트랜잭션 패턴 강제. 의도치 않은 flush로 인한 부분 커밋 방지.
-- **`get_db`는 이 파일이 아니라 `deps.py`에 있음** — FastAPI 의존성은 한 곳에 모으는 정책.
+- **역할**: Supabase PostgREST 클라이언트 싱글톤. SQLAlchemy `Session` 을 완전히 대체.
+- **`@lru_cache(maxsize=1)`**: 클라이언트를 한 번만 생성해 재사용.
+- **왜 PostgREST HTTP인가?** Supabase pooler가 `ENOTFOUND`(테넌트 미등록), 직접 연결 호스트는 IPv6 전용이라 psycopg2 직접 연결이 불가능. 대신 HTTPS + service_role 키로 REST API를 호출(RLS 우회).
 
-## 4. `app/db/models/__init__.py`
+## 3. DB 스키마 (Supabase가 관리)
 
-```python
-from app.db.models.user import User
-from app.db.models.garden_state import GardenState
-from app.db.models.plant import Plant
-from app.db.models.bud import Bud, BudHistory
-from app.db.models.conversation import Conversation, ConversationMessage
-from app.db.models.notification import Notification
-```
+ORM 모델 클래스는 없습니다. 테이블은 Supabase 마이그레이션으로 생성되며, 백엔드는
+`db.table("...")` 로 접근합니다. 주요 테이블과 의미:
 
-- **유일한 책임**: 모든 모델을 import하여 `Base.metadata` 에 등록. Alembic autogenerate가 모델을 누락하지 않게 함.
-- **순환 import 위험 없음**: 모델은 다른 도메인을 import하지 않음(외래키는 문자열 `"users.id"` 로 참조).
-
-## 5. `app/db/models/user.py`
-
-```python
-class User(Base):
-    __tablename__ = "users"
-    id: Mapped[str] = mapped_column(String, primary_key=True)
-    nickname: Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)
-    password_hash: Mapped[str] = mapped_column(String, nullable=False)
-    address: Mapped[str] = mapped_column(String, nullable=False, default="")
-    tone: Mapped[str] = mapped_column(String, nullable=False, default="counselor")
-    encrypted_api_key: Mapped[str | None] = mapped_column(String, nullable=True)
-    garden_rules: Mapped[dict] = mapped_column(JSON, nullable=False, default=lambda: {...})
-    appearance: Mapped[dict] = mapped_column(JSON, nullable=False, default=lambda: {"theme":"auto", "animation":"subtle"})
-    sound: Mapped[dict] = mapped_column(JSON, nullable=False, default=lambda: {"sfx":True, "bgm":False, "volume":0.6})
-    ai_model: Mapped[str] = mapped_column(String, nullable=False, default="claude-opus-4-7")
-    ai_proactive: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    created_at, updated_at
-```
-
-**컬럼 결정 이유**:
-
-- **`id: str (ULID)`**: 정렬 가능한 시간 기반 ID + URL-safe. INT auto-increment보다 분산·로그·디버깅에 유리.
-- **`nickname` unique + index**: 로그인 키로 사용되므로 인덱스 필수.
-- **`address` 기본값 = ""**: 닉네임 외 자유 표기. signup에서 초기엔 nickname 복사.
-- **`tone="counselor"`**: 톤 기본값을 따뜻한 상담사로 — 본 서비스의 컨셉.
-- **`encrypted_api_key` nullable**: 키 미입력 시에도 가입 자체는 가능. Fallback은 `settings.llm_api_key`.
-- **`garden_rules` JSON**: 4개 필드(`wilting_days`, `rot_disappear_days`, `deadline_warn_days`, `auto_transition`) — 사용자별 자동 전이 정책. JSON으로 두어 향후 룰 확장 시 마이그레이션 없이 추가 가능.
-- **`appearance` / `sound`**: 향후 PWA/모바일에서의 외관·음향. 현재 MVP에선 UI 사용처 없음(테마는 별도 localStorage).
-- **`ai_model="claude-opus-4-7"`**: 본 컬럼은 디폴트만 잡혀 있을 뿐, 실제 사용 모델은 `LLMClient.DEFAULT_MODEL="gemini-2.5-flash"` 가 우선. 향후 사용자 선택 가능하게 노출할 자리.
-- **`ai_proactive`**: 향후 자동 알림/제안 기능을 켜고 끌 플래그.
-
-## 6. `app/db/models/plant.py`
-
-```python
-class Plant(Base):
-    __tablename__ = "plants"
-    __table_args__ = (
-        Index("ix_plants_user_status", "user_id", "status"),
-        Index("ix_plants_user_last_activity", "user_id", "last_activity_at"),
-    )
-    id, user_id (FK CASCADE), name, description
-    species: Mapped[str] = ... default="tree_oak"
-    color: Mapped[str] = ... default="brand.primary_leaf"
-    status: Mapped[str] = ... default="active"   # active / dormant / archived
-    stats: Mapped[dict] = ... default=lambda: {"harvested_count":0, "rot_count":0, "active_bud_count":0}
-    last_activity_at: Mapped[datetime | None] = ... nullable=True
-    created_at, updated_at
-```
-
-- **인덱스 2개**:
-  - `(user_id, status)` — `list_plants` 가 `WHERE user_id=? AND status != 'archived'` 로 거의 항상 필터링.
-  - `(user_id, last_activity_at)` — 정렬 `ORDER BY last_activity_at DESC` 의 성능 보장.
-- **`species`, `color`**: 향후 식물 SVG 스프라이트 다양화를 위한 자리(현재 MVP에선 단일 비주얼).
-- **`status`**: 라이프사이클 — active(보통), dormant(휴면 — list_plants 기본 필터에서 제외), archived(삭제됨, soft delete).
-- **`stats` JSON**: 비정규화된 카운터. 실시간 정확도를 위해 `PlantService.increment_*` / `refresh_active_bud_count` 가 갱신.
-- **`last_activity_at`**: 정렬 키. `increment_stat` 호출 시 자동 업데이트.
-
-## 7. `app/db/models/bud.py`
-
-```python
-class Bud(Base):
-    __tablename__ = "buds"
-    __table_args__ = (
-        Index("ix_buds_user_status", "user_id", "status"),
-        Index("ix_buds_user_deadline", "user_id", "deadline"),
-        Index("ix_buds_plant_status", "plant_id", "status"),
-    )
-    id, user_id, plant_id (둘 다 FK CASCADE)
-    title, detail
-    type: ... default="concern"   # concern | schedule
-    status: ... default="seed"
-    progress: ... default=0
-    deadline: Mapped[date | None]
-    last_progress_at, disappeared_at: nullable DateTime
-    created_at, updated_at
-
-class BudHistory(Base):
-    id, bud_id (FK CASCADE)
-    from_status, to_status, at, reason
-    Index("ix_bud_histories_bud_at", "bud_id", "at")
-```
-
-- **인덱스 3개**:
-  - `(user_id, status)` — 대시보드 카운트 쿼리.
-  - `(user_id, deadline)` — `deadline_within_days` 필터.
-  - `(plant_id, status)` — 식물 상세 페이지의 봉우리 목록.
-- **`type`**: 고민과 일정을 동등하게 다루기 위해 도입 — UI에서 칼럼/뱃지로 구분.
-- **`progress: Integer`**: 정수 0~100. 자동 전이 임계 30/60/85에 사용.
-- **`last_progress_at`**: TransitionService가 wilting 판정에 사용.
-- **`disappeared_at`**: rot 후 14일(`rot_disappear_days`) 지나면 채워짐 → 프론트에서 보이지 않음(soft hide).
-- **`BudHistory`**: 모든 상태 전이를 기록. 봉우리 드로어의 "이력" 탭과 신뢰성·디버깅에 사용.
-
-## 8. `app/db/models/conversation.py`
-
-```python
-class Conversation(Base):
-    UniqueConstraint("user_id", "scope", "scope_id", name="uq_conversation_user_scope")
-    id, user_id, scope (global/plant/bud), scope_id (nullable)
-
-class ConversationMessage(Base):
-    Index("ix_conversation_messages_conv_at", "conversation_id", "at")
-    id, conversation_id (FK CASCADE)
-    at (default=utcnow, index)
-    role, text
-    skill_call: Mapped[dict | None]   # JSON으로 마지막 스킬 호출 정보 저장
-```
-
-- **3-튜플 unique** `(user_id, scope, scope_id)`: 같은 사용자가 같은 컨텍스트에서 단 하나의 대화방을 갖도록 보장. `get_or_create` 의 안정성 보증.
-- **`skill_call` JSON**: assistant 메시지가 어떤 스킬을 호출했는지 후속 분석/UI에서 활용 가능 (현재 표시는 안 함, 데이터만 보존).
-- **인덱스 `(conversation_id, at)`**: 히스토리 페이징의 핵심.
-
-## 9. `app/db/models/garden_state.py`
-
-```python
-class GardenState(Base):
-    UniqueConstraint("user_id", name="uq_garden_state_user_id")
-    id, user_id (FK CASCADE, indexed)
-    summary_cache: dict (JSON)
-    daily_briefing: str | None
-    daily_briefing_date: date | None
-    last_opened_at: datetime | None
-```
-
-- **사용자 1:1**: 사용자당 1행. unique constraint로 강제.
-- **`summary_cache`**: 활성 카운트들의 캐시본. 현재는 `stats router`가 매 호출마다 refresh 하지만, 향후 invalidate-on-write 패턴으로 옮길 자리.
-- **`daily_briefing` + `daily_briefing_date`**: 같은 날 여러 번 요청해도 한 번만 생성. 비용 절감.
-- **`last_opened_at`**: 향후 "오랜만에 정원을 들렀어요" 같은 UX 기회.
-
-## 10. `app/db/models/notification.py`
-
-```python
-class Notification(Base):
-    Index("ix_notifications_user_acked", "user_id", "acked_at")
-    id, user_id (FK CASCADE, indexed)
-    kind: str
-    payload: dict (JSON)
-    created_at
-    acked_at: datetime | None
-```
-
-- **`acked_at IS NULL`** 인 행이 "안 읽은 알림". `(user_id, acked_at)` 인덱스가 그 필터를 빠르게.
-- **`kind`**: `bud_wilting`, `bud_rot`, `deadline_warning` 3종. UI에서 색·아이콘 결정.
-- **`payload`**: 종류별 메타(예: `{bud_id, title, deadline}`). 프론트가 적절히 해석.
+- **`profiles`**: 사용자 프로필. `id`(Supabase Auth `sub`), `email`, `nickname`, `role`(`user`/`admin`),
+  `tone`, `ai_model`, `garden_rules`(JSON), `appearance`(JSON), `encrypted_api_key`, `created_at`.
+- **`plants`**: `id`(ULID), `user_id`, `name`, `description`, `species`, `color`,
+  `status`(`active`/`wilting`/`dormant`/`archived`), `harvested_count`, `rot_count`, `active_bud_count`,
+  `last_activity_at`. **`stats` 컬럼은 없음** — `PlantOut` 이 개별 카운터를 `stats` dict로 합성.
+- **`buds`**: `id`, `user_id`, `plant_id`, `title`, `detail`, `type`(`concern`/`schedule`),
+  `status`, `progress`(0~100), `deadline`, `last_progress_at`, `disappeared_at`, `created_at`, `updated_at`.
+  생애주기 상태: `bud → flower → fruit → harvested`, 방치 시 `wilting → rot`(씨앗 `seed` 는 폐기 — 마이그레이션 004).
+- **`bud_history`**: 모든 상태 전이 기록(`bud_id`, `from_status`, `to_status`, `at`, `reason`).
+- **`conversations`** / **`conversation_messages`**: 대화방(`user_id`, `scope`, `scope_id`) + 메시지(`role`, `text`, `at`, `skill_call`).
+- **`garden_state`**: 사용자 1:1 캐시(`summary_cache`, `daily_briefing*`, `last_opened_at`).
+- **`notifications`**: `kind`(`bud_wilting`/`bud_rot`/`deadline_warning`/`plant_wilting`/관리자 메시지), `payload`(JSON), `acked_at`.
+- **`calendar_events`**: 봉우리와 별개의 독립 일정(`title`, `event_date`, `plant_id`, `detail`, `color`). PostgREST 미노출이라 `exec_admin_query` RPC로 접근.
+- **`ai_logs`**: AI 채팅 로그 영구 저장(`filename`, `user_id`, `created_at`, `data` jsonb). 로컬 파일 미러와 병행.
 
 ---
 
-## 11. `app/auth/jwt.py`
+## 4. `app/deps.py` (인증 의존성)
 
 ```python
-ALGORITHM = "HS256"
+def get_db() -> Client:
+    from app.db.supa import get_client
+    return get_client()
 
-def create_access_token(user_id: str) -> str:
-    payload = {"sub": user_id, "type": "access", "iat": now, "exp": now+15min}
-    return jwt.encode(payload, settings.jwt_secret, algorithm=ALGORITHM)
-
-def create_refresh_token(user_id): ... type="refresh", exp=14일
-def decode_token(token: str) -> dict | None:   # 실패 시 None
-```
-
-- **`type`** 클레임으로 access/refresh를 구분 — `require_user` 와 `/auth/refresh` 가 각각 자신의 타입만 받아들임. 토큰 종류 혼용 공격 방지.
-- **`decode_token` 이 예외 대신 None 반환**: 호출처에서 `if payload is None: 401` 패턴이 깔끔.
-- **`HS256`**: 단일 백엔드 인스턴스에 적합. 마이크로서비스/JWKS 필요 시 RS256으로 변경.
-
-## 12. `app/deps.py`
-
-```python
-def get_db() -> Generator[Session, None, None]:
-    db = SessionLocal()
-    try: yield db
-    finally: db.close()
-
-_CREDS_EXC = HTTPException(401, "인증에 실패했습니다.", headers={"WWW-Authenticate":"Bearer"})
-
-def require_user(authorization, db) -> User:
-    if not authorization: raise _CREDS_EXC
-    scheme, _, token = authorization.partition(" ")
-    if scheme.lower() != "bearer" or not token: raise _CREDS_EXC
-    payload = decode_token(token)
-    if payload is None or payload.get("type") != "access": raise _CREDS_EXC
-    user_id = payload.get("sub")
-    if not user_id: raise _CREDS_EXC
+def require_user(authorization, db) -> SimpleNamespace:
+    # 1) JWKS(ES256/RS256)로 검증 시도 → 실패 시
+    # 2) supabase_jwt_secret(HS256)로 fallback 검증
+    #    둘 다 audience="authenticated"
+    user_id = payload["sub"]
     user = UserRepository(db).get_by_id(user_id)
-    if user is None: raise _CREDS_EXC
+    if user is None:  # 프로필 미존재 시 자동 생성(트리거 fallback)
+        user = repo.create_profile(user_id, email, nickname)
+    return user
+
+def require_admin(user=Depends(require_user)) -> SimpleNamespace:
+    if getattr(user, "role", "user") != "admin": raise 403
     return user
 ```
 
-- **모든 401 분기를 같은 메시지/헤더로 통일**: 정보 유출 최소화 (어느 단계에서 실패했는지 클라이언트가 구분 못 함).
-- **`require_user` 자체가 `Depends(get_db)` 를 받음**: 라우터는 `Depends(require_user)` 만 적으면 인증된 User 객체 획득.
-- **JWT 함수는 여기에 없다**: 책임 분리(`app.auth.jwt`). 이전엔 중복 정의되어 있었으나 정리함.
+- **Supabase JWT 검증**: 신규 Supabase 프로젝트는 **ES256(ECDSA P-256)** 으로 서명 → JWKS 엔드포인트(`/auth/v1/.well-known/jwks.json`)에서 EC 공개키를 로드해 검증. `_jwks_cache` 로 1회만 가져옴. HS256 fallback 유지.
+- **모든 401 분기를 같은 메시지/헤더(`_CREDS_EXC`)로 통일**: 어느 단계에서 실패했는지 클라이언트가 구분 못 하게.
+- **프로필 자동 생성**: DB 트리거(`handle_new_auth_user()`)가 보통 만들지만, 누락 시 `create_profile` fallback.
+- **`require_admin`**: `/admin/*` 전체를 보호.
+
+> JWT 발급·갱신은 백엔드가 아니라 **Supabase Auth**가 담당합니다. 따라서 별도 `app/auth/` 패키지나 `app/routers/auth.py`, refresh-token 쿠키 로직은 존재하지 않습니다.
 
 ---
 
-## 13. Repositories
+## 5. Repositories
 
-### 13.1 `app/repositories/user_repo.py`
+모든 repository는 `supabase Client` 를 받아 `db.table(...)` 로 접근하며, dict 결과를
+`SimpleNamespace` 로 감싸 반환합니다(`_row` / `_rows` 헬퍼). **`commit`/`refresh` 호출 없음** — PostgREST가 자동 커밋.
+빈 결과 처리는 `maybe_single()` 대신 `.limit(1)` + `res.data[0]` 패턴을 사용.
+
+### 5.1 `app/repositories/user_repo.py`
 
 ```python
 class UserRepository:
-    def __init__(self, db: Session): self.db = db
-    def get_by_id(self, user_id) -> User | None
-    def get_by_nickname(self, nickname) -> User | None
-    def create(self, nickname, password_hash) -> User:
-        user = User(id=str(ULID()), nickname=..., password_hash=..., address=nickname)
-        self.db.add(user); self.db.flush()  # commit 안 함
-        return user
-    def update(self, user_id, fields: dict) -> User | None  # setattr 루프
-    def delete(self, user_id) -> None
-    def set_encrypted_api_key(self, user_id, encrypted_key) -> None
-    def get_encrypted_api_key(self, user_id) -> str | None
+    def get_by_id(user_id) -> SimpleNamespace | None     # profiles 테이블
+    def create_profile(user_id, email, nickname)
+    def update(user_id, fields) -> SimpleNamespace | None
+    def delete(user_id) -> None
+    def set_encrypted_api_key(user_id, encrypted_key)
+    def get_encrypted_api_key(user_id) -> str | None
 ```
 
-**관찰**:
-- `commit` 없음 — Service가 책임.
-- `create()` 에서 `address=nickname` 으로 초기화하여 NOT NULL 제약 우회.
-- `update()` 는 `setattr` 루프 — 한 번에 여러 필드를 받을 수 있어 PATCH 라우터에 적합.
+- `profiles` 테이블 직접 접근. 비밀번호 해시는 없음(인증은 Supabase Auth).
 
-### 13.2 `app/repositories/plant_repo.py`
+### 5.2 `app/repositories/plant_repo.py`
 
 ```python
-def create(user_id, name, description, species, color) -> Plant
+def create(user_id, name, description, species, color) -> Plant   # id=ULID
 def get(user_id, plant_id) -> Plant | None   # user_id로 격리
 def list(user_id, include_dormant=True, sort="activity", limit=100)
 def update(user_id, plant_id, fields) -> Plant | None
-def increment_stat(user_id, plant_id, stat_key):
-    plant.stats[stat_key] += 1
-    plant.last_activity_at = utcnow()
-def update_active_bud_count(user_id, plant_id, count)
-def update_stats(user_id, plant_id, stats_update: dict)
 ```
 
-**핵심**:
-- 모든 메서드가 `user_id` 를 받음 → 다른 사용자의 식물 접근 차단 (수평 권한 격리).
-- `list()` 정렬: `activity` 시 `last_activity_at.desc().nulls_last(), created_at.desc()` — null이 뒤로 가도록 두어 새로 생성된 빈 식물도 자연스럽게 나옴.
-- `increment_stat()` 에서 dict를 새로 만들어(`dict(plant.stats or {})`) 재할당해야 SQLAlchemy JSON change tracking이 동작 — 단순 `plant.stats["x"] += 1` 은 mutation이 감지되지 않음.
+- 모든 메서드가 `user_id` 를 받음 → 다른 사용자의 식물 접근 차단(수평 권한 격리).
+- `list()` 는 항상 `status != "archived"`. `include_dormant=False` 면 `status in ("active","wilting")` 만 — 시든 식물은 정원 뷰에 갈색으로 계속 보임.
+- 정렬: `activity` 시 `last_activity_at.desc(nullsfirst=False), created_at.desc()`.
 
-### 13.3 `app/repositories/bud_repo.py`
+### 5.3 `app/repositories/bud_repo.py`
 
 ```python
 def create(user_id, plant_id, title, type, detail, deadline) -> Bud
@@ -311,584 +143,572 @@ def get(user_id, bud_id) -> Bud | None
 def list(user_id, plant_id=None, statuses=None, bud_type=None,
          wilting_only=False, deadline_within_days=None, limit=50)
 def update(user_id, bud_id, fields)
-def add_history(bud_id, from_status, to_status, reason) -> BudHistory
-def get_history(bud_id) -> list[BudHistory]   # ORDER BY at ASC
-def count_active(plant_id) -> int
+def delete(user_id, bud_id) -> bool
+def add_history(bud_id, from_status, to_status, reason)
+def get_history(bud_id) -> list   # ORDER BY at
 ```
 
-**핵심**:
-- `list()` 는 다양한 필터를 받지만 모두 optional — 호출처가 dict 또는 named arg로 자유롭게.
-- `deadline_within_days` 는 `today + N` 이하 cutoff로 묶음 — 캘린더/알림 사전조회에 사용.
-- `add_history()` 는 항상 ULID로 새 행을 만들고 flush — 트랜잭션은 service가.
+- `list()` 필터는 모두 optional. `deadline_within_days` 는 `today + N` 이하 cutoff — 캘린더/알림 사전조회용.
+- `add_history()` 는 항상 ULID로 새 행 생성.
 
-### 13.4 `app/repositories/conversation_repo.py`
+### 5.4 `app/repositories/conversation_repo.py`
 
 ```python
 def get_or_create(user_id, scope, scope_id) -> Conversation
-def add_message(conversation_id, role, text, skill_call) -> ConversationMessage
-def get_history(user_id, scope, scope_id, limit) -> list[ConversationMessage]
+def add_message(conversation_id, role, text, skill_call) -> Message
+def get_history(user_id, scope, scope_id, limit) -> list   # 최신 N개 후 시간순
+def list_conversations_for_user(user_id) -> list[dict]     # /conversations/list 용
+def delete_by_scope(user_id, scope, scope_id) -> int
 def search(user_id, query, scope, scope_id, limit)
 ```
 
-- **`get_or_create`** 가 UniqueConstraint와 짝지어 동작 — 동시성 환경에서 race condition 가능성은 있지만, 사용자별 단일 세션이라 실무적으로 거의 없음.
-- **`get_history`**: `ORDER BY at DESC LIMIT 20` 후 `reversed()` — 최신 20개만 가져오되, 표시는 시간순.
-- **`search`**: `LIKE %query%` 단순 검색. 향후 FTS5/pg_trgm으로 강화 가능.
+- **`get_or_create`** 가 `(user_id, scope, scope_id)` unique 제약과 짝지어 동작.
+- **`search`**: `ilike %query%` 단순 검색(LIKE 와일드카드 이스케이프).
 
-### 13.5 `app/repositories/garden_state_repo.py`
+### 5.5 `app/repositories/garden_state_repo.py`
 
 ```python
-def get_or_create(user_id) -> GardenState   # 없으면 생성 + flush
+def get_or_create(user_id) -> GardenState   # 사용자당 1행
 def update(user_id, fields) -> GardenState
 ```
 
-UniqueConstraint로 사용자당 1행 보장.
-
-### 13.6 `app/repositories/notification_repo.py`
+### 5.6 `app/repositories/notification_repo.py`
 
 ```python
 def push(user_id, kind, payload) -> Notification
-def list_unread(user_id) -> list[Notification]   # ORDER BY created_at ASC
-def ack(user_id, notification_id) -> bool        # acked_at = utcnow()
+def list_unread(user_id) -> list           # acked_at IS NULL
+def list_all(user_id, limit) -> list       # 읽음 포함, 최신순
+def ack(user_id, notification_id) -> bool  # acked_at 채움
+def ack_all(user_id) -> int
+def has_unacked(user_id, kind, ref_id) -> bool   # 중복 deadline 알림 방지
 ```
 
-- `list_unread()` 가 ASC 정렬인 이유: UI에서 시간 역순으로 표시할 때 클라이언트가 reverse하기 쉽고, 알림을 모두 ack하면 비어버려 정렬에 신경 쓸 일이 없음.
+### 5.7 `app/repositories/calendar_event_repo.py`
+
+- `calendar_events` 테이블이 PostgREST에 노출되지 않아 **`exec_admin_query` RPC + `_lit()` 이스케이프**로 접근.
 
 ---
 
-## 14. Services
+## 6. Services
 
-### 14.1 `app/services/user_service.py`
+서비스 계층도 `commit()/refresh()` 가 없습니다(PostgREST 자동 커밋). 시간 관련 값은 모두 `runtime_settings.now()/today()`(타임 트래블 반영)를 사용.
+
+### 6.1 `app/services/user_service.py`
 
 ```python
-_pwd_ctx = CryptContext(schemes=["argon2"], deprecated="auto")
-
 def _make_fernet() -> Fernet:
     raw = settings.key_encryption_secret.encode()
     key = base64.urlsafe_b64encode(hashlib.sha256(raw).digest())
     return Fernet(key)
-```
 
-- **Argon2**: bcrypt 대신 선택 — 메모리 hard 함수로 GPU 공격에 더 강함.
-- **Fernet 키 파생**: 사용자가 임의 길이 secret을 줘도 안전한 32바이트로 정규화. 같은 secret이면 항상 같은 key를 만들어 복호화 보장.
-
-```python
 class UserService:
-    def signup(nickname, password):
-        if exists(nickname): raise ValueError("이미 사용 중인 닉네임")
-        password_hash = _pwd_ctx.hash(password)
-        user = create()
-        _garden_repo.get_or_create(user.id)   # GardenState도 동시에
-        db.commit()
-    def authenticate(nickname, password) -> User | None
+    def get_me(user_id) -> profile
     def update_profile(user_id, fields):
-        forbidden = {"id", "password_hash", "created_at"}
-        safe_fields = {k:v for k,v in fields.items() if k not in forbidden and v is not None}
-        ...
-    def change_password(user_id, old, new) -> bool
-    def delete_account(user_id, confirm_nickname) -> bool   # 닉네임 재입력 확인
-    def set_api_key(user_id, api_key):  # Fernet 암호화 후 저장
-    def get_api_key(user_id) -> str | None  # 복호화
+        forbidden = {"id", "email", "created_at"}   # 안전 필드만 통과
+    def delete_account(user_id) -> dict:            # bulk cascade 삭제
+    def set_api_key(user_id, api_key)               # Fernet 암호화 저장
+    def get_api_key(user_id) -> str | None          # 복호화
 ```
 
-**왜 이렇게**:
-- `update_profile` 에서 `id/password_hash/created_at` 을 명시 차단 — PATCH로 비밀번호를 평문으로 덮는 사고 방지.
-- `delete_account` 에서 닉네임 재입력 — 의도적인 안전장치.
-- `set_api_key` 는 매번 새로 암호화 후 저장 — 키를 알아도 IV 다르면 같은 ciphertext가 안 나오게 (Fernet은 timestamp 포함).
+- **`signup`/`authenticate`/`change_password` 없음** — 인증을 Supabase Auth로 이관하며 제거됨.
+- **Fernet 키 파생**: 임의 길이 secret을 SHA-256으로 32바이트로 정규화. 같은 secret이면 같은 key → 복호화 보장.
+- **`delete_account`**: `buds → plants → conversations → garden_state → notifications` 순으로 user_id 기준 bulk delete(FK CASCADE 활용) + AI 로그 파일 삭제 + **Supabase Auth 사용자 삭제**(admin 키).
 
-### 14.2 `app/services/plant_service.py`
+### 6.2 `app/services/plant_service.py`
 
 ```python
-_ACTIVE_STATUSES = {"seed","bud","flower","fruit","wilting"}
-
 class PlantService:
-    def create(user_id, name, description, species, color):
-        plant = _repo.create(...); db.commit(); db.refresh(plant); return plant
-    def get(user_id, plant_id) -> Plant   # 없으면 ValueError
+    def create(user_id, name, description, species, color)
+    def get(user_id, plant_id)   # 없으면 ValueError
     def list(user_id, include_dormant=True, sort="activity")
     def update(user_id, plant_id, fields)
     def delete(user_id, plant_id, archive=True):
-        if archive: plant.status = "archived"; db.flush()
-        else: db.delete(plant)
-        db.commit()
-    def find_matches(user_id, query, top_k=3) -> list[Plant]:
-        # name LIKE %q% OR description LIKE %q%, status != archived
-    def increment_harvest(user_id, plant_id)
-    def increment_rot(user_id, plant_id)
-    def mark_dormant(user_id, plant_id)
-    def update_stats(user_id, plant_id, stats_update)
-    def refresh_active_bud_count(user_id, plant_id):
-        count = db.scalar(SELECT COUNT(*) FROM buds WHERE plant_id=... AND status IN active)
-        _repo.update_active_bud_count(...)
+        if archive: status="archived"   # soft delete
+        else: db.table("plants").delete()
+    def find_matches(user_id, query, top_k=3)   # ilike name, status != archived
 ```
 
-- **`find_matches`** 는 `match_plant` 스킬이 호출 — LIKE 기반 단순 매칭이지만 한국어 식물명이 대부분 짧고 명확해 효과적.
-- **`refresh_active_bud_count`** 는 직접 호출하는 곳은 없지만 향후 캐시 갱신 hook에서 사용할 자리.
+- **`find_matches`** 는 `match_plant` 스킬이 호출 — LIKE 와일드카드 이스케이프 후 `ilike "%q%"`.
 
-### 14.3 `app/services/bud_service.py`
+### 6.3 `app/services/bud_service.py`
 
 ```python
-_PROGRESS_TRANSITIONS = [(85,"fruit"), (60,"flower"), (30,"bud")]
-_ACTIVE_STATUSES = {"seed","bud","flower","fruit","wilting"}
+_PROGRESS_TRANSITIONS = [(85,"fruit"), (60,"flower")]
+_GROWTH_STATUSES = {"bud","flower","fruit","harvested"}
+_WILTED_STATUSES = {"wilting","rot"}
 
 class BudService:
-    def create(user_id, plant_id, title, type, detail, deadline):
-        bud = _repo.create(...)
-        _repo.add_history(bud.id, "", "seed", "생성")
-        db.commit()
-    def get(user_id, bud_id) -> Bud
-    def list(user_id, plant_id=None, statuses=None, bud_type=None, wilting_only=False, filters=None):
-        # filters 는 dict 방식 하위 호환
+    def create(...):  add_history(bud.id, "", "bud", "생성")   # 시작 상태 = bud (seed 폐기)
+    def get(user_id, bud_id)   # 없으면 ValueError
+    def list(..., wilting_only=False, filters=None)   # filters dict 하위 호환
     def update_status(user_id, bud_id, to_status, reason):
-        from_status = bud.status
-        bud.status = to_status; bud.last_progress_at = utcnow()
-        _repo.add_history(bud_id, from_status, to_status, reason)
-        db.commit()
+        if to_status == "seed": raise ValueError          # seed 거부
+        if 성장상태 and (현재 시듦 or 식물 시듦): raise _NO_REVIVAL_MSG   # 소생 불가
+        if to_status == "harvested" and progress < 100: raise   # 수확은 100%만
     def update_progress(user_id, bud_id, progress, auto_transition=True, note=""):
         progress = max(0, min(100, progress))
-        bud.progress = progress; bud.last_progress_at = utcnow()
-        if auto_transition:
-            for threshold, status in _PROGRESS_TRANSITIONS:
-                if progress >= threshold: target = status; break
-            if target != bud.status: add_history(...)
-        db.commit()
-    def set_deadline(user_id, bud_id, deadline)
-    def abandon(user_id, bud_id, reason) -> update_status(to="rot")
-    def harvest(user_id, bud_id, note) -> update_status(to="harvested")
-    def mark_wilting(user_id, bud_id) -> update_status(to="wilting")
+        if 진행률 상승 and (시듦/식물 시듦): raise   # 소생 불가
+        # 85% → fruit, 60% → flower 자동 전이
+    def set_deadline / move_to_plant / delete
+    def abandon -> update_status("rot")
+    def harvest -> update_status("harvested")
+    def mark_wilting -> update_status("wilting")
     def get_with_history(user_id, bud_id)
-    def purge_disappeared(user_id, older_than_days):
-        # rot/harvested 상태로 N일 지난 봉우리에 disappeared_at 채우기
 ```
 
 **핵심**:
-- `_PROGRESS_TRANSITIONS` 가 **내림차순으로 정렬되어 있다** — 첫 매칭이 가장 진행된 상태가 되도록 (85% 이상이면 fruit, 그 아래에서만 flower 등).
-- `abandon/harvest/mark_wilting` 은 `update_status` 의 의미 있는 별칭 — 스킬이 명시적이도록.
-- `purge_disappeared` 는 향후 dispose 정책에 사용. 현재 호출처 없음.
+- **`_PROGRESS_TRANSITIONS` 는 내림차순** — 첫 매칭이 가장 진행된 상태(85%↑ → fruit, 그 아래 60%↑ → flower). 더 이상 `(30,"bud")` 단계는 없음.
+- **`seed` 폐기**: `update_status` 가 `seed` 를 거부(마이그레이션 004).
+- **소생 불가(no-revival)**: 시든/썩은 봉우리(또는 시든 식물에 속한 봉우리)는 성장 상태로 전이하거나 진행률을 올릴 수 없음. 대화는 가능.
+- **수확 가드**: `harvested` 는 진행률 100% 봉우리만.
+- **`move_to_plant`**: 다른 식물로 이동(보관된 식물로는 이동 불가). 이력에 기록.
+- **`abandon/harvest/mark_wilting`** 은 `update_status` 의 의미 있는 별칭.
 
-### 14.4 `app/services/conversation_service.py`
+### 6.4 `app/services/conversation_service.py`
 
 ```python
-def append(user_id, scope, scope_id, role, text, skill_call=None):
-    conv = _repo.get_or_create(...)
-    msg = _repo.add_message(conv.id, role, text, skill_call)
-    db.commit()
+def append(user_id, scope, scope_id, role, text, skill_call=None)
 def get_history(user_id, scope, scope_id, limit=20)
+def list_conversations(user_id)        # /conversations/list
+def delete_conversation(user_id, scope, scope_id)
 def search(user_id, query, scope, scope_id, limit=10)
 ```
 
-- 매우 얇은 래퍼지만, **서비스 계층을 유지하는 이유**: 향후 메시지에 cross-cutting 로직(예: PII 마스킹, 토큰 카운팅)을 끼워 넣을 자리.
+- 얇은 래퍼지만 cross-cutting 로직(PII 마스킹, 토큰 카운팅 등)을 끼울 자리.
 
-### 14.5 `app/services/garden_state_service.py`
+### 6.5 `app/services/garden_state_service.py`
 
 ```python
 def refresh_summary(user_id) -> dict:
-    # SINGLE 쿼리로 5개 SUM(CASE WHEN ...)
-    row = db.execute(SELECT
-        sum_when(concern & active) AS active_concerns,
-        sum_when(schedule & active) AS active_schedules,
-        sum_when(harvested & this_month) AS harvested_this_month,
-        sum_when(wilting) AS wilting_count,
-        sum_when(rot) AS rot_count,
-        WHERE user_id=...)
-    total_plants = SELECT COUNT(*) FROM plants WHERE user_id AND status != archived
-    summary = {...}
-    _repo.update(user_id, {"summary_cache": summary})
-    db.commit(); return summary
+    # 모든 buds/plants를 가져와 Python에서 카운트(raw SQL 미사용)
+    active = {"seed","bud","flower","fruit","wilting"}
+    summary = {active_concerns, active_schedules, harvested_this_month,
+               wilting_count, rot_count, total_plants}
+    _repo.update(user_id, {"summary_cache": summary}); return summary
 
-def get_summary(user_id) -> dict   # cached
+def get_summary(user_id) -> dict           # 캐시본(summary_cache)
 def compute_stats(user_id, scope, plant_id, period) -> dict
-def build_briefing(user_id) -> str:
-    summary = refresh_summary(user_id)
-    plant_names = ", ".join(p.name for p in plants[:5]) or "없음"
-    return f"현재 정원에는 {summary['total_plants']}개의 식물이 있습니다. ..."
-
-def mark_opened(user_id)
-def get_daily_briefing(user_id) -> str | None   # 오늘 날짜인 경우만
-def set_daily_briefing(user_id, text)
+def build_briefing(user_id) -> str         # 매 호출 재생성(문자열 포맷)
 ```
 
-**왜 단일 쿼리로 바꿨나**: 이전엔 6개 `SELECT COUNT(*)` 를 따로 보냈음. `SUM(CASE WHEN cond THEN 1 ELSE 0 END)` 으로 묶으면 한 번의 fullscan에서 모든 카운트를 얻음 → 사용자가 봉우리가 많아져도 일정 성능.
+- **Python 집계**: PostgREST에는 `SUM(CASE WHEN)` 같은 임의 집계가 없어, 봉우리 목록을 받아 Python에서 카운트. `active` 집계에 `seed` 를 잠정 포함(마이그레이션 004 전 과거 행 호환).
+- **브리핑은 매 호출 재생성** — 하루 캐시 staleness 제거(순수 문자열 포맷, LLM 미사용).
 
-### 14.6 `app/services/transition_service.py`
+### 6.6 `app/services/transition_service.py`
 
 ```python
 class TransitionService:
-    def scan_all(db):
-        for user_id in users: scan_user(db, user_id)
-    def scan_user(db, user_id):
-        rules = user.garden_rules
-        wilting_days = rules.get("wilting_days", 7)
-        rot_disappear_days = rules.get("rot_disappear_days", 14)
-        deadline_warn_days = rules.get("deadline_warn_days", 3)
+    def scan_all(db):                       # profiles 전체 순회
+        for row in profiles: scan_user(db, row["id"], row["garden_rules"])
+    def scan_user(db, user_id, garden_rules):
+        wilting_days, rot_disappear_days, deadline_warn_days, auto_transition,
+        plant_wilt_bud_threshold, plant_wilt_days = rules.get(...) or rs.get(...)
+        now, today = rs.now(), rs.today()   # 타임 트래블 반영
         if auto_transition:
-            # 1) active 봉우리의 last_progress가 N일 이상 정지 → wilting
-            # 2) wilting 봉우리가 N일 더 지나면 rot + disappeared_at
-        # 3) deadline 임박 봉우리는 deadline_warning 알림
-        db.commit()
+            # 1) 활동 정지 N일 → wilting (+ bud_wilting 알림)
+            # 2) wilting M일 더 → rot + disappeared_at (+ bud_rot 알림)
+            # 3) 식물의 wilting 봉우리 >= N개이고 M일 경과 → 식물 자체 wilting (+ plant_wilting 알림)
+        # 4) deadline 임박 봉우리 → deadline_warning (has_unacked로 중복 방지)
 ```
 
-- **사용자별 규칙 적용**: 각자의 `garden_rules`를 그대로 사용 — 같은 시스템에서도 사용자마다 다른 정책.
-- **`auto_transition` 플래그**: 사용자가 자동 전이를 꺼두면 wilting/rot 자동 처리 안 함. 단 마감 알림은 항상 발송.
+- **사용자별 규칙**: 각자의 `garden_rules` 우선, 없으면 `runtime_settings` 기본값.
+- **`auto_transition` 플래그**: 꺼두면 시듦/썩음 자동 처리 안 함. 단 마감 경고는 항상 발송.
+- **식물 단위 시듦(plant-level wilting)**: 봉우리뿐 아니라 식물 전체가 시들 수 있음(`plant_wilt_bud_threshold` / `plant_wilt_days`).
+
+### 6.7 `app/services/calendar_service.py`
+
+- 독립 일정(`calendar_events`) CRUD. `list_range`, `create`, `update`, `delete`. RPC 경로로 접근.
 
 ---
 
-## 15. AI 모듈
+## 7. AI 모듈
 
-### 15.1 `app/ai/skill_base.py`
+### 7.1 `app/ai/skill_base.py`
 
 ```python
 @dataclass
 class SkillResult:
-    ok: bool; message: str
-    data: dict = field(default_factory=dict)
-    error_code: str = ""
+    ok: bool; message: str; data: dict = {}; error_code: str = ""
 
 @dataclass
 class SkillContext:
-    user_id: str; db: Any
-    plant_service, bud_service, garden_state_service, conversation_service = None
+    user_id; db
+    plant_service, bud_service, garden_state_service, conversation_service, calendar_service = None
+    scope: str = "global"   # global | plant | bud | calendar
+    scope_id: str | None = None
 
 class SkillBase(ABC):
-    name: str = ""; description: str = ""; parameters: dict = {}
-    @abstractmethod
-    def run(self, args: dict, ctx: SkillContext) -> SkillResult: ...
-    def to_tool_spec(self) -> dict:
-        return {"name":..., "description":..., "input_schema":parameters}
+    name; description; parameters
+    def run(self, args, ctx) -> SkillResult: ...
+    def to_tool_spec(self) -> dict   # {name, description, input_schema}
 ```
 
-- 모든 스킬은 이 4가지(name/description/parameters/run)만 정의 — 일관성 강제.
-- `to_tool_spec()` 의 출력이 그대로 LLM 카탈로그 항목이 됨.
+- 모든 스킬은 name/description/parameters/run만 정의 — 일관성 강제.
+- `SkillContext` 에 `scope`/`scope_id` 가 포함되어 세션별 수정·삭제 권한(`app/ai/permissions.py`) 판단.
 
-### 15.2 `app/ai/skill_registry.py`
+### 7.2 `app/ai/skill_registry.py`
 
 ```python
 class SkillRegistry:
     def register(skill)
     def get(name) -> SkillBase | None
-    def list() -> list[SkillBase]
     def build_catalog() -> list[dict]    # [skill.to_tool_spec() for ...]
     def dispatch(name, args, ctx) -> SkillResult:
-        skill = get(name)
-        if skill is None: return SkillResult(ok=False, message="not found", error_code="not_found")
+        if skill is None: return SkillResult(ok=False, error_code="not_found")
         try: return skill.run(args, ctx)
         except Exception as e: return SkillResult(ok=False, message=str(e), error_code="internal")
 ```
 
 - **`dispatch` 가 모든 예외를 캐치** — 단일 스킬 실패가 채팅 전체를 죽이지 않도록.
-- **`build_catalog`** 매 요청마다 호출되지만 결과는 같음 — 미래 메모이즈 후보지만 현재는 비용이 낮아 그대로.
 
-### 15.3 `app/ai/llm_client.py`
+### 7.3 `app/ai/llm_client.py`
 
-이미 04 문서에서 다룬 변환 어댑터.
+Anthropic IR → Gemini 변환 어댑터(자세한 내용은 `04_AI_Chat_And_Skills.md`).
 
 추가 결정 사항:
-- **`if not self._key: return {"text":"API 키 설정 안내", "tool_use": None}`** — API 키 미설정 사용자에게도 친절한 답.
-- **에러 메시지 정제**: Gemini의 raw error code(NOT_FOUND, API_KEY_INVALID, quota) 를 한국어로 변환.
+- **모델 런타임 교체**: `LLMClient(api_key, model=...)`. 우선순위는 per-user `ai_model` → `runtime_settings.llm_default_model` → `LLMClient.DEFAULT_MODEL`.
+- **에러 분류·기록**: Gemini 503(overloaded)/429(rate_limit)/auth/404(model_not_found)/timeout 등을 `_classify_error()` 로 분류해 `error`/`error_kind`/`error_cause` 로 반환 → 관리자 AI 로그에 노출. 503은 지수 백오프 3회 재시도.
+- **API 키 미설정**: 친절한 안내 텍스트 반환.
 
-### 15.4 `app/ai/prompt_builder.py`
+### 7.4 `app/ai/prompt_builder.py`
 
 ```python
 class PromptBuilder:
-    def build_system(ctx, current_screen="홈", stats=None, plants=None) -> str:
-        plant_summary = "\n".join(f"  - [{p.id}] {p.name}: {p.description[:40]}" for p in plants[:10])
-        today_str = date.today().isoformat()
-        return f"""당신은 Plant Counselor의 AI 정원사입니다. ...
-오늘 날짜: {today_str}
-현재 화면: {current_screen}
-## 정원 현황 ...
-## 핵심 모델 ...
-## 행동 원칙 ...
-## 행동 규칙 ...
-## 응답 형식 ..."""
+    def build_system(ctx, current_screen="홈", stats=None, plants=None,
+                     scope="global", scope_id=None, scope_plant_name="",
+                     scope_bud_title="", tone="counselor") -> str:
+        # 오늘 날짜 = rs.today() (타임 트래블 반영)
+        # 톤 가이드(counselor/assistant/friend) + 정원 현황 + 스코프 컨텍스트 + 행동 규칙
 ```
 
-자세한 디자인 의도는 `04_AI_Chat_And_Skills.md` § 5 참고.
+- **`rs.today()`** 사용 → 타임 트래블 연동. `tone` 으로 응답 말투 선택. 자세한 디자인 의도는 `04_AI_Chat_And_Skills.md` 참고.
 
-### 15.5 `app/ai/chat_orchestrator.py`
+### 7.5 `app/ai/chat_orchestrator.py`
 
 ```python
-MAX_STEPS = 10
+MAX_STEPS = 10  # fallback; 실제 값은 runtime_settings.llm_max_steps에서 매 실행 읽음
 
 class ChatOrchestrator:
-    def run(user_id, text, scope, scope_id, current_screen, db):
+    def run(user_id, text, scope, scope_id, current_screen, db, tone="counselor"):
         rec = LogRecorder(user_id, text)
-        rec.log_event("start", ...)
-        plant_svc, bud_svc, gs_svc, conv_svc = services["..."]
-        ctx = SkillContext(...)
-        stats = gs_svc.get_summary(user_id); plants = plant_svc.list(user_id)
-        system = builder.build_system(ctx, current_screen, stats, plants)
-        rec.set_system(system)
-        history = [...]   # 최근 20개 + 새 user 메시지
-        conv_svc.append(user_id, scope, scope_id, "user", text)
+        ctx = SkillContext(..., scope=scope, scope_id=scope_id)   # calendar 서비스 포함
+        stats = gs_svc.get_summary(...); plants = plant_svc.list(...)
+        # scope_plant_name / scope_bud_title 해석 → off-topic 감지에 사용
+        system = builder.build_system(..., tone=tone)
+        history = 최근 20개 + 새 user 메시지
         yield "event: start"
-        working_history = list(history)
-        for step in range(MAX_STEPS):
+        for step in range(rs.get("llm_max_steps", MAX_STEPS)):
             result = llm.chat(working_history, catalog, system)
-            text_, tool_use = result["text"], result["tool_use"]
-            if not text_ and not tool_use:
-                result = llm.chat(...)   # 1회 재시도
-                ...
+            self._record_llm_error(rec, step+1, result)   # upstream 오류 기록
+            if 빈 응답: llm.chat(...) 1회 재시도
             if tool_use:
                 yield "event: tool_call"
-                skill_result = registry.dispatch(tool_use["name"], tool_use["input"], ctx)
-                rec.log_skill(...)
+                skill_result = registry.dispatch(...)
                 yield "event: tool_result"
-                working_history += [{"role":"assistant","content":[{"type":"tool_use",...}]},
-                                    {"role":"user","content":[{"type":"tool_result",...}]}]
+                working_history += [assistant tool_use, user tool_result]
                 continue
             break
-        if not response_text:
-            result = llm.chat(working_history, [], system)
-            response_text = result.get("text") or "작업을 완료했습니다."
+        if not response_text: result = llm.chat(working_history, [], system)  # 강제 요약
         rec.set_final(response_text)
-        for word in response_text.split():
-            yield f"event: token data: {{...}}"
-        if conv_svc and response_text:
-            conv_svc.append(..., role="assistant", text=response_text, skill_call=last_tool_use)
-        rec.log_event("done"); rec.save()
+        for word in response_text.split(): yield "event: token"
+        conv_svc.append(..., "assistant", response_text, skill_call=last_tool_use)
+        rec.save(db)   # ← db를 넘겨 Supabase ai_logs에 저장
         yield "event: done"
 ```
 
-**왜 sync generator?** FastAPI의 `StreamingResponse` 는 sync/async 둘 다 받음. SQLAlchemy 동기 세션과 동기 LLM SDK를 그대로 쓸 수 있어 간결.
+**왜 sync generator?** FastAPI `StreamingResponse` 는 sync/async 둘 다 받음. 동기 Gemini SDK·supabase-py 클라이언트를 그대로 쓸 수 있어 간결.
 
-**왜 `tool_use_id = name`?** Gemini는 function_call에 별도 ID를 안 줘서, name으로 페어링하는 우회. 같은 스킬을 한 라운드에 두 번 호출하지 않는 한 안전. 두 번 호출은 ReAct 루프 특성상 거의 없음(매 라운드에 1개 tool만).
+**`error` 이벤트는 없음**: 스킬·LLM 오류는 token/done 흐름 안에서 처리되며, upstream 오류는 `_record_llm_error` 로 로그에만 기록.
 
-### 15.6 `app/ai/log_recorder.py`
+**왜 `tool_use_id = name/step`?** Gemini는 function_call에 별도 ID를 안 주므로 우회. 매 라운드에 1개 tool만 호출되므로 안전.
+
+### 7.6 `app/ai/log_recorder.py` + `app/ai/log_store.py`
 
 ```python
-LOG_DIR = .../backend/logs/chat
-
-class LogRecorder:
-    def __init__(user_id, text):
-        filename = f"{ts}_{user_id[:8]}.json"
-    def set_system(prompt)
-    def set_history(history)
-    def log_llm_call(call_n, messages, tools_count)
-    def log_llm_result(call_n, text, tool_use)   # 위 call_n의 결과로 채움
-    def log_skill(name, args, ok, message, data)
-    def log_event(event_type, detail)
-    def set_final(response_text)
-    def save():
-        json.dump(self._data, f, ensure_ascii=False, indent=2, default=str)
+# log_recorder.LogRecorder — 채팅 한 턴의 전체 컨텍스트를 누적
+filename = f"{ts}_{user_id[:8]}.json"
+self._data = {timestamp, user_id, user_input, system_prompt, history,
+              llm_calls, skill_calls, final_response, events, llm_errors}
+def set_system / set_history / log_llm_call / log_llm_result
+def log_skill / log_llm_error / log_event / set_final
+def save(db=None):  log_store.save(db, filename, user_id, created_at, data)
 ```
 
-- **`default=str`**: datetime이나 ULID 객체를 자동으로 문자열화 — try/except 노이즈 제거.
-- **모든 LLM 호출의 전체 messages를 보존** — 디버깅에 가장 큰 자산.
+```python
+# log_store — Supabase ai_logs 테이블 + 로컬 파일 미러
+def save(db, filename, user_id, created_at, data)  # DB 우선(durable), 파일은 미러
+def list_rows(db)        # DB + 파일을 filename 기준 dedup 병합(DB 우선)
+def get(db, filename)    # 단일 로그 data
+def parse_meta(data, filename)   # 목록용 경량 메타(토큰 추정, error_count 등)
+def delete_for_user(db, user_id) / delete_all(db)
+```
 
-### 15.7 `app/ai/skills/*.py`
+- **왜 DB 미러?** Render 무료처럼 디스크가 휘발성인 환경에서 파일만 쓰면 재시작 시 사라짐. `ai_logs` 테이블이 정본, 파일은 로컬 개발용 best-effort 미러.
+- `list_rows` 가 둘을 병합 → DB만/파일만/둘 다 어떤 상황에서도 로그가 보임.
+- 관리자 라우터(`admin.py`)가 이 모듈을 통해서만 읽기/삭제.
 
-15개 스킬 각각의 코드는 매우 짧으므로 한 표에 요약:
+### 7.7 `app/ai/skills/*.py` (20개 스킬)
 
-| 파일 | 역할 한 줄 | 호출 패턴 |
-|------|------------|-----------|
-| `think.py` | `{ok=True, message="사고 완료", data={"reasoning": args["reasoning"]}}` 만 반환. DB 변경 없음. | LLM이 멀티스텝 계획을 명시화할 때 호출. |
-| `match_plant.py` | `PlantService.find_matches(query)` | 새 식물 생성 전 중복 방지. |
-| `create_plant.py` | `PlantService.create(name, description, species, color)` | 새 분야. |
-| `delete_plant.py` | `PlantService.delete(archive=...)` | 명시적 삭제 의사 확인 시. |
-| `create_bud.py` | `BudService.create(plant_id, title, type, detail, deadline)` | 봉우리 추가. deadline은 ISO 파싱 시도, 실패 시 None. |
-| `update_bud_status.py` | `BudService.update_status(bud_id, to_status, reason)` | 직접 상태 강제. |
-| `update_bud_progress.py` | `BudService.update_progress(bud_id, progress)` | 진행률 + 자동 전이. |
-| `set_deadline.py` | `BudService.set_deadline(bud_id, date.fromisoformat)` | ISO 파싱 실패 시 `ok=False, error_code="invalid_argument"`. |
-| `abandon_bud.py` | `BudService.abandon(bud_id, reason)` | 명확한 포기 의사 시. |
-| `harvest_bud.py` | `BudService.harvest(bud_id, note)` | 완료. |
-| `list_plants.py` | `PlantService.list(include_dormant, sort)` | 답을 위한 컨텍스트 수집. |
-| `list_buds.py` | `BudService.list(plant_id, statuses, bud_type)` | 같은 용도. |
-| `get_statistics.py` | `GardenStateService.compute_stats(scope, plant_id, period)` | "이번 달 진행 어땠어?" 류. |
-| `get_garden_briefing.py` | `GardenStateService.build_briefing()` | 일일 브리핑. |
-| `search_conversation.py` | `ConversationService.search(query, scope, scope_id, limit)` | 과거 대화 회상. |
+`chat.py` `_build_registry()` 에 등록되는 20개 스킬:
 
-각 스킬의 description은 **단순 설명이 아니라 LLM에 대한 가이드**입니다. 예:
-- `create_plant.description` — "match_plant로 중복 여부를 먼저 확인하세요" 라는 protocol 강제.
-- `abandon_bud.description` — "사용자가 그만두겠다고 명확히 밝혔을 때 호출하세요" — 모호한 부정에 잘못 작동하지 않게.
+| 파일 | 역할 한 줄 |
+|------|------------|
+| `think.py` | 멀티스텝 계획을 명시화(DB 변경 없음). |
+| `match_plant.py` | `PlantService.find_matches(query)` — 중복 방지. |
+| `create_plant.py` | `PlantService.create(...)` — 새 분야. |
+| `delete_plant.py` | `PlantService.delete(archive=...)`. |
+| `create_bud.py` | `BudService.create(...)` — 봉우리 추가. |
+| `update_bud_status.py` | `BudService.update_status(...)` (seed 거부·소생 불가 가드). |
+| `update_bud_progress.py` | `BudService.update_progress(...)` (85→fruit, 60→flower). |
+| `set_deadline.py` | `BudService.set_deadline(...)` (ISO 파싱 실패 시 invalid_argument). |
+| `abandon_bud.py` | `BudService.abandon(...)` → rot. |
+| `harvest_bud.py` | `BudService.harvest(...)` (100%만). |
+| `list_plants.py` | `PlantService.list(...)`. |
+| `list_buds.py` | `BudService.list(...)`. |
+| `get_statistics.py` | `GardenStateService.compute_stats(...)`. |
+| `get_garden_briefing.py` | `GardenStateService.build_briefing()`. |
+| `search_conversation.py` | `ConversationService.search(...)`. |
+| `suggest_scope_change.py` | 스코프 불일치 감지 후 세션 변경 제안. |
+| `create_calendar_event.py` | 독립 일정 생성. |
+| `list_calendar_events.py` | 독립 일정 조회. |
+| `update_calendar_event.py` | 독립 일정 수정(권한: calendar 스코프). |
+| `delete_calendar_event.py` | 독립 일정 삭제. |
+
+각 스킬의 description은 **LLM에 대한 가이드**입니다(예: `create_plant` 은 "match_plant로 중복 확인" 프로토콜 강제).
+
+### 7.8 `app/ai/permissions.py`
+
+- 세션 스코프별 수정·삭제 권한(`can_modify_bud`/`can_delete_plant`/`can_modify_calendar_event`/`guard_bud`). 변이 스킬이 권한 밖이면 forbidden 거부.
 
 ---
 
-## 16. Routers
+## 8. Routers
 
-### 16.1 `app/main.py`
+### 8.1 `app/main.py`
 
 ```python
 @asynccontextmanager
 async def lifespan(app):
-    Base.metadata.create_all(bind=engine)
-    sched = setup_scheduler()
-    yield
-    sched.shutdown()
+    sched = setup_scheduler(); yield; sched.shutdown()
+    # Base.metadata.create_all 없음 — 테이블은 Supabase 마이그레이션이 관리
 
-app = FastAPI(title="Plant Counselor API", version="0.1.0", lifespan=lifespan)
-app.add_middleware(CORSMiddleware, allow_origins=[settings.cors_allow_origin], ...)
+api = FastAPI(title="Plant Counselor API", version="0.2.0", lifespan=lifespan)
+
+def _parse_cors_origins(raw):   # 콤마 구분, '*'/'null' 거부, scheme/netloc 검증
 
 PREFIX = "/api/v1"
-for r in [auth, me, plants, buds, stats, chat, conversations, notifications]:
-    app.include_router(r.router, prefix=PREFIX)
+for r in [me, plants, buds, stats, chat, conversations, notifications, public, admin]:
+    api.include_router(r.router, prefix=PREFIX)
 
-@app.get("/health")
+@api.get("/health")
 def health(): return {"status":"ok"}
+
+# 전체 앱을 CORSMiddleware로 감싸 500 응답에도 CORS 헤더가 붙도록
+app = CORSMiddleware(app=api, allow_origins=_cors_origins, allow_credentials=True, ...)
 ```
 
-- **`Base.metadata.create_all`**: 개발 편의 — Alembic 없이도 시작. prod에선 Alembic 마이그레이션 사용.
-- **`lifespan`**: 스케줄러를 시작/종료 hook과 일관되게.
-- **`/health`**: 인프라 헬스체크용 — JWT 없이 200.
+- **`Base.metadata.create_all` 없음**: 스키마는 Supabase 마이그레이션이 관리(SQLAlchemy 미사용).
+- **`auth` 라우터 없음**: 인증은 Supabase Auth.
+- **CORS가 앱 전체를 래핑**: 미처리 500 응답도 CORS 헤더를 포함해, 브라우저가 진짜 서버 오류 대신 오해의 소지가 있는 CORS 실패를 보고하지 않게.
+- **`/health`**: prefix 없이 200(인증 불필요).
 
-### 16.2 `app/routers/auth.py`
+### 8.2 `app/routers/me.py`
 
-- `/auth/signup`: 닉네임 중복 시 409.
-- `/auth/login`: access는 응답, refresh는 HTTP-only 쿠키. `samesite=lax` 로 CSRF 완화.
-- `/auth/refresh`: 쿠키만으로 새 access. refresh 자체는 갱신 안 함(rolling refresh 아님).
-- `/auth/logout`: 쿠키 삭제만. 토큰 블랙리스트는 안 둠 (15분 짧은 TTL로 보안 보강).
-
-### 16.3 `app/routers/me.py`
-
-- `GET /me` — 현재 사용자 프로필.
-- `PATCH /me` — UserUpdate 스키마로 안전 필드만.
-- `POST /me/password` — 기존 비밀번호 검증 후 변경.
-- `DELETE /me` — body의 confirm_nickname 검증.
+- `GET /me` — 현재 프로필(`UserOut`).
+- `PATCH /me` — `UserUpdate`(nickname/tone/ai_model/garden_rules/appearance).
+- `DELETE /me` — 회원탈퇴(`UserService.delete_account`).
 - `PUT /me/api-key` — Fernet 암호화 저장.
+- (비밀번호 변경 엔드포인트 없음.)
 
-### 16.4 `app/routers/plants.py`
+### 8.3 `app/routers/plants.py`
 
 ```python
-@router.get("")        # list
+@router.get("")        # list (sort, include_dormant)
 @router.get("/{id}")   # detail
-@router.patch("/{id}") # partial update
-@router.delete("/{id}?hard=bool")  # archive 또는 hard delete
+@router.patch("/{id}") # PlantUpdate
+@router.delete("/{id}?hard=bool")  # archive(기본) 또는 hard delete
 ```
 
-- 모든 응답이 `{ok:true, data:...}` 형태 — 프론트 fetch 래퍼와 통일.
-
-### 16.5 `app/routers/buds.py`
+### 8.4 `app/routers/buds.py`
 
 ```python
-@router.get("")           # 필터: plant_id, wilting_only
-@router.get("/{id}")      # bud + history
-@router.patch("/{id}")    # title/detail만 직접 수정 (BudPatch)
+@router.get("")              # 필터: plant_id, wilting_only
+@router.get("/{id}")         # {bud, history}
+@router.patch("/{id}")       # BudPatch{title?, detail?}
+@router.patch("/{id}/move")  # BudMoveRequest{target_plant_id} → move_to_plant
+@router.delete("/{id}")      # 봉우리 삭제
+@router.patch("/{id}/progress")  # BudProgressUpdate{progress, note?} (자동 전이)
 ```
 
-- 상태 변경은 채팅 스킬을 통해서만 — 사용자가 실수로 데이터를 일관성 깨뜨리지 못하게 의도적 제약.
+- `PATCH /{id}` 는 제목/detail만 직접 수정. 상태는 진행률 슬라이더(`/progress`)·이동·삭제·채팅 스킬로만 변경.
 
-### 16.6 `app/routers/stats.py`
+### 8.5 `app/routers/stats.py`
 
 ```python
 GET /stats/summary    -> refresh_summary 실시간 계산
-GET /briefing/today   -> daily_briefing 캐시 (날짜 바뀌면 재생성)
-GET /calendar?from=&to=
-    -> from/to ISO 검증, 최대 366일, 봉우리 deadline 기준 events 그룹화
+GET /briefing/today   -> build_briefing (매 호출 재생성)
+GET /calendar?from=&to=  -> 봉우리 deadline + 독립 일정 병합, from/to ISO 검증, 최대 366일
+# 독립 일정 CRUD
+POST  /calendar/events
+PATCH /calendar/events/{id}
+DELETE /calendar/events/{id}
 ```
 
-### 16.7 `app/routers/conversations.py`
+### 8.6 `app/routers/conversations.py`
 
 ```python
-GET /conversations?scope=&scope_id=&limit=
-POST /conversations/search   { query, scope, scope_id, limit }
+GET    /conversations/list             # 대화방 요약 목록
+GET    /conversations?scope=&scope_id=&limit=   # 메시지 목록
+DELETE /conversations?scope=&scope_id=          # 스코프 대화 삭제
+POST   /conversations/search { query, scope, scope_id, limit }
 ```
 
-### 16.8 `app/routers/notifications.py`
+### 8.7 `app/routers/notifications.py`
 
 ```python
-GET /notifications              -> 안 읽은 알림 ASC
-POST /notifications/{id}/ack    -> acked_at 채움
+GET  /notifications?include_read=&limit=   # 안 읽음(기본) 또는 전체
+POST /notifications/{id}/ack
+POST /notifications/ack-all
 ```
 
-### 16.9 `app/routers/chat.py`
+### 8.8 `app/routers/chat.py`
 
 ```python
-_REGISTRY = build_registry()    # 모듈 로드 시 1회
+_REGISTRY = _build_registry()   # 모듈 로드 시 1회, 20개 스킬 등록
 _PROMPT_BUILDER = PromptBuilder()
 
 def _resolve_api_key(db, user):
-    key = UserService(db).get_api_key(user.id)
-    return key or settings.llm_api_key
+    return UserService(db).get_api_key(user.id) or settings.llm_api_key
 
 @router.post("/chat/message")
 def chat_message(req, user, db):
-    api_key = _resolve_api_key(db, user)
-    llm = LLMClient(api_key)
-    services = {plant: PlantService(db), bud: BudService(db), garden_state: GardenStateService(db), conversation: ConversationService(db)}
+    model = getattr(user, "ai_model", None) or rs.get("llm_default_model", LLMClient.DEFAULT_MODEL)
+    llm = LLMClient(api_key, model=model)
+    services = {plant, bud, garden_state, conversation, calendar}
     orchestrator = ChatOrchestrator(llm, _REGISTRY, _PROMPT_BUILDER, services)
     return StreamingResponse(generate(), media_type="text/event-stream",
-                              headers={"Cache-Control":"no-cache", "X-Accel-Buffering":"no"})
+                             headers={"Cache-Control":"no-cache", "X-Accel-Buffering":"no"})
 ```
 
-- **registry/prompt_builder는 모듈 캐시**: stateless라 안전.
-- **services/llm은 매 요청**: DB 세션과 사용자 API 키가 매번 다르므로 캐시 불가.
-- **`X-Accel-Buffering: no`**: nginx 등 reverse proxy가 SSE를 버퍼링하지 않도록.
+- **registry/prompt_builder는 모듈 캐시**(stateless). **services/llm은 매 요청**(DB 클라이언트는 공유 싱글톤이지만 사용자 API 키·모델이 매번 다름).
+- **모델 우선순위**: per-user `ai_model` → runtime `llm_default_model` → `LLMClient.DEFAULT_MODEL`.
+- **`X-Accel-Buffering: no`**: reverse proxy가 SSE를 버퍼링하지 않도록.
 
-## 17. `app/scheduler/jobs.py`
+### 8.9 `app/routers/admin.py` (`require_admin`)
+
+`/admin/*` 전체가 관리자 전용. 대시보드 통계, 사용자/역할 관리, AI 로그 브라우저(log_store 경유),
+알림 발송, 런타임 컨트롤러(설정·SQL 실행기·타임 트래블·스케줄러 트리거), 데이터 관리(개별 삭제),
+백업/복원 엔드포인트를 제공. (전체 목록은 `06_API_Reference.md` 참고.)
+
+### 8.10 `app/routers/public.py`
+
+- `GET /public/runtime` — 인증 없이 표시 안전한 런타임 값(기본 모델 ID·라벨)만 노출.
+
+## 9. `app/scheduler/jobs.py`
 
 ```python
 scheduler = BackgroundScheduler()
 
 def setup_scheduler():
-    @scheduler.scheduled_job("interval", minutes=10, id="transition_scan")
+    interval = rs.get("scheduler_interval_minutes", 10)
+    @scheduler.scheduled_job("interval", minutes=interval, id="transition_scan")
     def transition_scan():
-        with SessionLocal() as db:
-            TransitionService(db).scan_all(db)
-    scheduler.start()
-    return scheduler
+        db = get_client()
+        TransitionService().scan_all(db)
+    scheduler.start(); return scheduler
 ```
 
-- **`with SessionLocal() as db`**: 작업이 끝나면 자동 close — 누수 방지.
-- **`id="transition_scan"`**: 같은 ID로 등록 시도가 있어도 중복되지 않도록.
-- **10분 간격**: 알림이 너무 잦지 않으면서, 사용자가 늦지 않게 알 수 있는 균형.
+- **간격은 `runtime_settings`** 에서 읽음(기본 10분). `get_client()` 싱글톤을 그대로 사용.
+- **`id="transition_scan"`**: 중복 등록 방지.
 
 ---
 
-## 18. `app/schemas/*` (Pydantic)
+## 10. `app/runtime_settings.py`
+
+인메모리 런타임 설정 저장소(`DEFAULTS` + `_store`). JSON 스냅샷으로 재시작 후에도 유지 가능.
+
+```python
+DEFAULTS = {
+    "llm_default_model": "gemini-2.5-flash", "llm_max_steps": 10, "llm_temperature": None,
+    "scheduler_interval_minutes": 10,
+    "default_wilting_days": 7, "default_rot_disappear_days": 14,
+    "default_deadline_warn_days": 3, "default_auto_transition": True,
+    "default_plant_wilt_bud_threshold": 2, "default_plant_wilt_days": 3,
+    "system_log_level": "INFO", "system_max_log_files": 500,
+    "app_timezone_offset_hours": 9,   # KST
+    "time_offset_seconds": 0,         # 타임 트래블
+}
+AVAILABLE_MODELS = [ ... ]   # 관리자 모델 드롭다운(기본+per-user)이 공유하는 단일 출처
+
+def get/get_all/set/set_many/reset/reset_all
+def save_snapshot/load_snapshot   # JSON 스냅샷
+def real_now()   # KST wall-clock (타임 트래블 미반영)
+def now()        # real_now() + time_offset_seconds
+def today()      # now().date()
+```
+
+- **타임 트래블**: `now() = (utcnow + tz_offset) + time_offset_seconds`. transition_service·prompt_builder가 `now()/today()` 사용.
+- **`app_timezone_offset_hours=9`**: 모든 사용자 대상 날짜를 KST로 계산해 프론트(KST)와 "오늘" 일치.
+
+---
+
+## 11. `app/schemas/*` (Pydantic v2)
+
+ORM이 없으므로 모든 Out 스키마는 `ConfigDict(from_attributes=True)` 로 `SimpleNamespace`/dict에서 변환합니다.
 
 ### `schemas/user.py`
-- `UserCreate(nickname, password)`, `UserLogin`, `UserOut`(with `from_attributes=True` for ORM), `UserUpdate`(optional fields), `PasswordChange`, `ApiKeySet`, `TokenResponse`.
-- 모든 입력 모델에 별도 검증자 미정의 — 사용자 메시지가 한국어/짧기 때문에 길이 제약을 너무 빡빡하게 두면 UX 저하.
+- `UserOut`(email/nickname/role/tone/ai_model/garden_rules/appearance/created_at, `model_validator`로 NULL → 기본값 coerce), `UserUpdate`(optional), `ApiKeySet{api_key}`.
 
 ### `schemas/plant.py`
-- `PlantOut(model_config=ConfigDict(from_attributes=True))` — ORM에서 직접 변환.
-- `PlantUpdate` — PATCH용 optional 필드 4개.
-- `PlantListResponse` — 향후 페이지네이션 cursor 자리.
+- `PlantOut` — `model_validator(mode="before")` 로 `harvested_count`/`rot_count`/`active_bud_count` 컬럼을 `stats` dict로 합성(DB에 `stats` 컬럼 없음).
+- `PlantUpdate` — PATCH용 optional 4개(name/description/species/color).
 
 ### `schemas/bud.py`
-- `BudOut`, `BudHistoryOut`, `BudWithHistory`, `BudPatch(title?, detail?)`, `BudListResponse`.
-- `BudPatch` 가 `status`/`progress`/`deadline` 을 받지 않는 이유: 그것들은 채팅을 통해서만 변경되어야 (skill의 책임).
+- `BudOut`, `BudHistoryOut`, `BudPatch{title?, detail?}`, `BudProgressUpdate{progress, note?}`, `BudMoveRequest{target_plant_id}`.
+- `BudPatch` 가 status/progress/deadline을 받지 않는 이유: 그것들은 전용 엔드포인트·스킬로만 변경.
 
 ### `schemas/conversation.py`
-- `ConversationMessageOut`, `ConversationHistory`, `ChatRequest(text, scope="global", scope_id?, current_screen="홈")`.
-- `current_screen` 이 기본값 "홈" 인 이유: 프론트가 누락해도 기본 컨텍스트로 동작.
-
-### `schemas/common.py`
-- `ApiSuccess`, `ApiError` — 응답 envelope 표준.
-- (이전엔 `SummaryStats` 도 있었으나 미사용으로 제거).
+- `ChatRequest{text, scope="global", scope_id?, current_screen="홈"}`.
 
 ---
 
-## 19. Alembic
+## 12. 마이그레이션 (`backend/migrations/`)
 
-- `alembic.ini`, `alembic/env.py` — 표준 구조.
-- `alembic/env.py` 가 `from app.db.models import *` 로 모든 모델을 import해 `target_metadata = Base.metadata` 가 완전하게 잡힘.
-- 새 컬럼 추가 시: `alembic revision --autogenerate -m "msg"` → `alembic upgrade head`.
+Supabase에 적용하는 SQL 마이그레이션:
 
-## 20. `backend/run.py`
+- `001_calendar_events.sql` — 독립 일정 테이블.
+- `002_ai_logs.sql` — AI 로그 영구 저장 테이블.
+- `003_calendar_event_color.sql` — 일정 색상 컬럼.
+- `004_remove_seed_bud_status.sql` — `seed` 상태 제거(과거 행 → `bud` 승격).
+
+> Alembic은 사용하지 않습니다. 스키마 변경은 Supabase 마이그레이션 SQL 또는 컨트롤러 SQL 실행기로 적용합니다.
+
+## 13. `backend/run.py`
 
 ```python
 import uvicorn
 if __name__ == "__main__":
-    uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True,
+                reload_excludes=["*.json", "logs/**"])
 ```
 
-- 한 줄 진입점. prod에선 `uvicorn app.main:app --workers 4` 같이 직접 실행 권장.
+- **`reload_excludes`**: 런타임 설정 스냅샷(`*.json`)·채팅 로그(`logs/**`) 저장 시 서버 재로드 방지.
+- prod에선 `uvicorn app.main:app --workers 4` 등으로 직접 실행 권장.
 
 ---
 
-## 21. 결정 요약 표
+## 14. 결정 요약 표
 
 | 결정 | 대안 | 채택 이유 |
 |------|------|-----------|
+| supabase-py PostgREST HTTP | SQLAlchemy/psycopg2 | pooler ENOTFOUND·IPv6 전용 직접 연결 회피 |
+| Supabase Auth(Google OAuth) | 자체 JWT 인증 | 소셜 로그인 UX, 인증 구현 제거 |
+| ES256 JWKS 검증(HS256 fallback) | HS256 단독 | 신규 Supabase 프로젝트는 ES256 서명 |
 | ULID id | UUID4 / auto-increment | 정렬 가능 + URL safe + 디버깅 친화 |
-| Argon2 | bcrypt | GPU 공격에 더 안전 |
-| Fernet + SHA-256 파생 | 별도 KMS | 단일 배포 환경에서 충분, 키 회전 가능 |
-| HS256 JWT | RS256 / Paseto | 단일 백엔드, 비용 균형 |
-| HTTP-only refresh 쿠키 | localStorage | XSS 노출 차단 |
-| SQLAlchemy 2.x Mapped | 1.x style | 타입 힌트 친화, modern |
-| ReAct 루프 자체 구현 | LangChain / Anthropic agent | 외부 의존 최소화, Gemini SDK와 직접 매핑 |
+| Fernet + SHA-256 파생 | 별도 KMS | 단일 배포 환경에서 충분 |
+| ai_logs DB + 파일 미러 | 파일 단독 | 휘발성 디스크(Render)에서도 로그 보존 |
+| runtime_settings 인메모리 + 스냅샷 | 환경변수만 | 무중단 런타임 변경 + 타임 트래블 |
+| ReAct 루프 자체 구현 | LangChain | 외부 의존 최소화, Gemini SDK 직접 매핑 |
 | Anthropic 형식 IR | Gemini 직접 형식 | 향후 멀티-LLM 어댑터 용이 |
-| sync generator SSE | async/EventSource | 동기 SDK·세션과 자연스러움 |
-| ChatPanel zustand | Context API | 페이지 외부에서 트리거 가능 (CustomEvent + store) |
-| TanStack Query | 직접 useEffect | 캐시·invalidate·staleTime 통합 관리 |
-| Tailwind v4 + CSS variables | CSS-in-JS | 빌드 산출물 작고 토큰 재사용 쉬움 |
+| sync generator SSE | async/EventSource | 동기 SDK·클라이언트와 자연스러움 |
+| CORSMiddleware로 앱 전체 래핑 | add_middleware | 500 응답에도 CORS 헤더 보장 |

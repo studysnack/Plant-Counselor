@@ -1,8 +1,12 @@
 # 10. 완성본 구현 상태 (최종 기준 문서)
 
-> **최종 업데이트**: 2026-05-28  
-> 이 문서는 가장 최근 구현 상태를 기록하는 단일 기준 문서입니다.  
-> 이전 세션에서 누적된 변경사항을 모두 포함합니다.
+> **최종 업데이트**: 2026-06-05  
+> 이 문서는 `docs/MVP/` 중 현재 코드에 가장 가까운 기준 문서입니다.  
+> 봉우리 생애주기·정원 그래픽·스킬 목록 등 핵심 영역은 현재 코드에 맞춰 보정됨.  
+> 단, 인증/DB 스택 일부 잔재(아래 §3 파일 구조·§12 환경, §14 기술 결정)는
+> 초기 SQLAlchemy/SQLite/자체 JWT 시절 기록이 남아 있다. 실제 백엔드는
+> **Supabase Auth(Google OAuth) + supabase-py(PostgREST HTTP)** 이며 관리자 패널
+> (`/admin/*`)이 추가되어 있다. 최신 명세는 루트 `AGENTS.md`·실제 코드를 우선한다.
 
 ---
 
@@ -17,11 +21,11 @@
 ## 2. 구현 완료 기능 체크리스트
 
 ### ✅ 인증
-- [x] 닉네임 + 비밀번호 가입 / 로그인
-- [x] JWT 액세스(15분) + HTTP-only 리프레시(14일)
-- [x] 401 자동 갱신 + 요청 재시도
-- [x] 비밀번호 변경, 계정 삭제(닉네임 확인)
-- [x] Argon2 비밀번호 해싱
+- [x] Supabase Auth + Google OAuth 로그인 (자체 비밀번호 폼 없음)
+- [x] Supabase JWT 검증: ES256(JWKS) 우선 + HS256 fallback (`deps.py`)
+- [x] 401 자동 갱신(refreshSession) + 요청 재시도
+- [x] 계정 삭제(이메일 재확인) — 전체 데이터 cascade + Supabase Auth 사용자 삭제
+- [x] 사용자 API 키 Fernet 암호화 / 관리자 역할(`profiles.role`)
 
 ### ✅ 식물(Plant)
 - [x] AI 자연어로 생성 (match_plant → create_plant 자동 체인)
@@ -41,10 +45,10 @@
 - [x] **시듦은 성장의 종착점(소생 불가)**: 봉우리/식물이 시들면 성장(진행도 상승·전진 상태전이·수확) 차단, 대화는 계속 가능 (`bud_service` 가드). 시듦→썩음·포기는 허용.
 
 ### ✅ AI 채팅 시스템
-- [x] 자연어 → ReAct 루프(MAX_STEPS=10) → 스킬 자동 호출
+- [x] 자연어 → ReAct 루프(MAX_STEPS은 `runtime_settings.llm_max_steps`에서 읽음, 기본 10) → 스킬 자동 호출
 - [x] 질문 금지 원칙: AI가 확인 없이 의도 추론·즉시 실행
 - [x] 4가지 대화 스코프: global / plant / bud / calendar
-- [x] 15개 스킬 전체 구현
+- [x] 20개 스킬 전체 구현 (think, match_plant, create_plant, delete_plant, create_bud, update_bud_status, update_bud_progress, set_deadline, abandon_bud, harvest_bud, list_plants, list_buds, get_statistics, get_garden_briefing, search_conversation, suggest_scope_change, create_calendar_event, list_calendar_events, update_calendar_event, delete_calendar_event)
 - [x] SSE 스트리밍 (token 이벤트, 단어 단위)
 - [x] 스킬 실행 후 TanStack Query 자동 캐시 무효화
 - [x] "briefing" 캐시 무효화 포함 (plant/bud 생성·상태변경·수확·포기 시)
@@ -69,8 +73,8 @@
 ### ✅ 캘린더 & 일정
 - [x] 월별 그리드 + 이벤트 도트(최대 3개) + 클릭 시 목록 펼침
 - [x] 이벤트 카드: 제목 + 식물명 badge + detail(시간) + 타입(일정/고민)
-- [x] "일정 AI와 대화" → calendar 스코프 채팅 (일정 조회·생성·수정 전용)
-- [x] "+ 일정 추가" → global 채팅 열기
+- [x] 우측 상단 공통 "AI 대화" 버튼 → 전역 채팅 (캘린더 화면이면 calendar 스코프 컨텍스트)
+- [x] "+ 일정 추가" 모달 → calendar_events 직접 생성
 - [x] AI가 일정 자동 분류: "밥먹기" → 일상, "면접" → 취업 (질문 없이)
 - [x] "오늘", "내일" → 자동 날짜 변환
 - [x] 오늘 일정 패널 (우측)
@@ -97,10 +101,9 @@
 - [x] 10분 APScheduler 자동 전이 + 알림 생성
 
 ### ✅ 테마
-- [x] 모드: light / dark / system
-- [x] 강조색 4종: emerald / sapphire / violet / sunset
+- [x] 모드: light / dark / system (강조색 선택 UI는 없음 — 고정 올리브 팔레트)
 - [x] Pre-hydration (theme-init.js): 첫 페인트 깜빡임 없음
-- [x] localStorage persist
+- [x] localStorage persist (`{mode, resolved}`)
 
 ### ✅ 설정
 - [x] 5탭: 계정 / AI / 정원 규칙 / 테마 / 정보
@@ -133,70 +136,41 @@ plant-counselor/
 ├── backend/
 │   ├── app/
 │   │   ├── ai/
-│   │   │   ├── chat_orchestrator.py  # ReAct 루프 (MAX_STEPS=10)
-│   │   │   ├── llm_client.py         # Gemini 2.5 Flash API 래퍼
-│   │   │   ├── log_recorder.py       # 채팅 로그 JSON 저장
-│   │   │   ├── prompt_builder.py     # 시스템 프롬프트 (봉우리 탐색 규칙 포함)
+│   │   │   ├── chat_orchestrator.py  # ReAct 루프 (MAX_STEPS은 runtime_settings에서)
+│   │   │   ├── llm_client.py         # Gemini(google-genai) 래퍼 + 오류 분류/재시도
+│   │   │   ├── log_recorder.py       # 채팅 로그 기록 → log_store 경유 저장
+│   │   │   ├── log_store.py          # AI 로그 저장/조회: Supabase ai_logs + 파일 미러(병합 리더)
+│   │   │   ├── permissions.py        # 세션별 수정·삭제 권한 가드
+│   │   │   ├── prompt_builder.py     # 시스템 프롬프트 + 응답 톤(_TONE_GUIDE)
 │   │   │   ├── skill_base.py         # SkillBase + SkillContext + SkillResult
 │   │   │   ├── skill_registry.py     # 스킬 등록 + build_catalog()
-│   │   │   └── skills/               # 15개 스킬 (각 파일)
-│   │   │       ├── think.py
-│   │   │       ├── match_plant.py
-│   │   │       ├── create_plant.py
-│   │   │       ├── delete_plant.py
-│   │   │       ├── create_bud.py
-│   │   │       ├── update_bud_status.py
-│   │   │       ├── update_bud_progress.py
-│   │   │       ├── set_deadline.py
-│   │   │       ├── harvest_bud.py
-│   │   │       ├── abandon_bud.py
-│   │   │       ├── list_plants.py
-│   │   │       ├── list_buds.py      # description에 "bud_id 필요 시 먼저 호출" 명시
-│   │   │       ├── get_statistics.py
-│   │   │       ├── get_garden_briefing.py
-│   │   │       └── search_conversation.py
-│   │   │
-│   │   ├── auth/
-│   │   │   └── jwt.py
+│   │   │   └── skills/               # 20개 스킬 (목록은 §4.2; 캘린더 4종 + suggest_scope_change 포함)
 │   │   │
 │   │   ├── db/
-│   │   │   ├── base.py
-│   │   │   ├── session.py
-│   │   │   └── models/
-│   │   │       ├── user.py
-│   │   │       ├── plant.py
-│   │   │       ├── bud.py
-│   │   │       ├── conversation.py
-│   │   │       ├── notification.py
-│   │   │       └── garden_state.py
+│   │   │   └── supa.py               # Supabase 클라이언트 싱글톤 (PostgREST HTTP)
 │   │   │
-│   │   ├── repositories/
-│   │   │   └── conversation_repo.py  # list_conversations_for_user() 추가
-│   │   │
+│   │   ├── repositories/             # supabase-py Client 기반 (plant/bud/conversation/
+│   │   │                             #   notification/calendar_event/user/garden_state)
 │   │   ├── services/
 │   │   │   ├── plant_service.py
-│   │   │   ├── bud_service.py
+│   │   │   ├── bud_service.py        # 진행률 전이 60/85, 수확 100%, 소생 불가, move_to_plant
 │   │   │   ├── conversation_service.py
 │   │   │   ├── garden_state_service.py
-│   │   │   ├── transition_service.py
+│   │   │   ├── transition_service.py # 봉우리·식물 시듦/썩음, 마감 알림
+│   │   │   ├── calendar_service.py
+│   │   │   ├── backup_service.py
 │   │   │   └── user_service.py
 │   │   │
 │   │   ├── schemas/
-│   │   ├── routers/
-│   │   │   ├── auth.py
-│   │   │   ├── me.py
-│   │   │   ├── plants.py
-│   │   │   ├── buds.py
-│   │   │   ├── stats.py
-│   │   │   ├── chat.py
-│   │   │   ├── conversations.py      # GET /conversations/list 추가
-│   │   │   └── notifications.py
-│   │   │
+│   │   ├── routers/                  # me, plants, buds, stats, chat, conversations,
+│   │   │                             #   notifications, public, admin (전부 /api/v1)
 │   │   ├── scheduler/jobs.py
+│   │   ├── runtime_settings.py       # 런타임 변수(모델/스텝/시듦 임계/타임트래블) + AVAILABLE_MODELS
 │   │   ├── config.py
-│   │   ├── deps.py
-│   │   └── main.py
+│   │   ├── deps.py                   # Supabase JWT 검증, require_user/require_admin
+│   │   └── main.py                   # CORS 다중 오리진 래퍼 + 라우터 등록
 │   │
+│   ├── migrations/                   # 001_calendar_events ~ 004_remove_seed_bud_status
 │   ├── pyproject.toml
 │   ├── requirements.txt
 │   ├── .env.example
@@ -207,43 +181,40 @@ plant-counselor/
 │   │   ├── layout.tsx                # root: html, body, theme-init Script
 │   │   ├── providers.tsx             # QueryClientProvider, AuthGate
 │   │   ├── globals.css               # 디자인 토큰 (cream/olive 팔레트)
-│   │   ├── (auth)/login/page.tsx
-│   │   └── (app)/
-│   │       ├── layout.tsx            # Sidebar + ChatPanel + FAB + prefetchAll()
-│   │       ├── page.tsx              # 홈 (enabled guard 적용)
-│   │       ├── plants/
-│   │       │   ├── page.tsx          # 정원(캐러셀+스프라이트) / 리스트 뷰
-│   │       │   └── [id]/page.tsx     # 식물 상세 + BudDetailDrawer (z:45)
-│   │       ├── calendar/page.tsx     # 캘린더 + 인접 월 프리페치
-│   │       ├── history/page.tsx      # 대화 기록 브라우저 (2-패널)
-│   │       └── settings/page.tsx
+│   │   ├── (auth)/login/page.tsx     # Google OAuth 단일 로그인
+│   │   ├── (app)/
+│   │   │   ├── layout.tsx            # Sidebar + ChatPanel + onAuthStateChange + prefetchAll()
+│   │   │   ├── home/page.tsx         # 홈 (enabled guard)
+│   │   │   ├── plants/
+│   │   │   │   ├── page.tsx          # 벡터 정원(GardenPlantVisual) + 수확 바구니 / 리스트 뷰
+│   │   │   │   └── [id]/page.tsx     # 식물 상세 + BudDetailDrawer (헤더 통계는 봉우리에서 계산)
+│   │   │   ├── calendar/page.tsx     # 캘린더 + 인접 월 프리페치
+│   │   │   ├── history/page.tsx      # 대화 기록 브라우저 (2-패널)
+│   │   │   └── settings/page.tsx
+│   │   └── admin/                    # 관리자 패널 (role=admin): layout/page/users/
+│   │                                 #   logs/notifications/data/controller
 │   │
 │   ├── components/
-│   │   ├── chat/ChatPanel.tsx        # 드래그 리사이즈, useQuery 브레드크럼, SKILL_INVALIDATIONS
-│   │   └── layout/
-│   │       ├── Sidebar.tsx           # 다크 올리브 + "대화 기록" 링크 + hover 프리페치
-│   │       └── NotificationsPopover.tsx
+│   │   ├── chat/
+│   │   │   ├── ChatPanel.tsx         # 드래그 리사이즈, useQuery 브레드크럼, SKILL_INVALIDATIONS
+│   │   │   └── AiChatButton.tsx      # 우측 상단 공통 버튼 (채팅 열리면 숨김)
+│   │   ├── plants/GardenPlantVisual.tsx  # Pixel 벡터 식물 + GardenHarvestBasket
+│   │   ├── layout/{Sidebar, NotificationsPopover}.tsx
+│   │   └── ui/Skeleton.tsx
 │   │
 │   ├── lib/
-│   │   ├── api/
-│   │   │   ├── client.ts
-│   │   │   ├── auth.ts, me.ts
-│   │   │   ├── plants.ts, buds.ts
-│   │   │   ├── stats.ts
-│   │   │   ├── conversations.ts      # listConversations(), getHistory(), searchConversation()
-│   │   │   └── notifications.ts
-│   │   │
-│   │   ├── queryKeys.ts              # QK 팩토리 (conversations, historyThread 추가)
-│   │   ├── store/
-│   │   │   ├── authStore.ts
-│   │   │   ├── chatStore.ts          # chatWidth + setChatWidth persist
-│   │   │   └── themeStore.ts
-│   │   │
-│   │   └── status.ts
+│   │   ├── api/                      # client, me, plants, buds, stats, conversations,
+│   │   │                             #   notifications, admin
+│   │   ├── queryKeys.ts              # QK 팩토리
+│   │   ├── markdown.tsx              # 자체 마크다운 렌더러 (ChatPanel·/history 공유)
+│   │   ├── supabase.ts               # 브라우저 Supabase 클라이언트
+│   │   ├── status.ts                 # 봉우리 상태(label/color/normalize, seed 없음)
+│   │   └── store/{authStore, chatStore, themeStore}.ts
 │   │
-│   └── public/sprites/               # 픽셀아트 스프라이트 PNG
+│   └── public/sprites/               # sky/grass 등 일부 PNG (식물은 벡터로 렌더)
 │
-├── scripts/generate_pixel_sprites.py
+├── render.yaml                       # Render 백엔드 블루프린트
+├── docs/                             # MVP/ + DEMO_GUIDE 등 (구 Plant-Counselor_Documents에서 이동)
 ├── CLAUDE.md
 └── README.md
 ```
@@ -277,7 +248,7 @@ if not response_text:  # MAX_STEPS 소진
     response_text = llm.chat(working_history, [], system)["text"] or "작업을 완료했습니다."
 ```
 
-### 4.2 15개 스킬
+### 4.2 20개 스킬
 
 | # | 이름 | 타입 | 주요 파라미터 |
 |---|------|------|--------------|
@@ -296,6 +267,11 @@ if not response_text:  # MAX_STEPS 소진
 | 13 | get_statistics | 조회 | scope?, period? |
 | 14 | get_garden_briefing | 조회 | (없음) |
 | 15 | search_conversation | 조회 | query, scope? |
+| 16 | suggest_scope_change | 메타 | target_scope, target_id?, reason? |
+| 17 | create_calendar_event | 변경 | title, date, plant_id?, detail? |
+| 18 | list_calendar_events | 조회 | from?, to? |
+| 19 | update_calendar_event | 변경 | event_id, title?, date?, detail? |
+| 20 | delete_calendar_event | 변경 | event_id |
 
 ### 4.3 프롬프트 핵심 규칙 (prompt_builder.py)
 
@@ -643,11 +619,12 @@ cp assets/sprites/* frontend/public/sprites/
 
 | 항목 | 설명 |
 |------|------|
-| 봉우리 이동 | 다른 식물로 봉우리 옮기기 |
 | 통계 차트 | 주간/월간 진행률 그래프 |
 | 반복 일정 | 매주 월요일 등 recurrence |
 | 모바일 반응형 | 현재 desktop 최적화 |
-| PostgreSQL 연동 | prod 환경 DB 교체 |
+
+> 참고: "봉우리 이동"(다른 식물로 옮기기)은 이후 `PATCH /buds/{id}/move`로 구현됨.
+> "PostgreSQL 연동"도 Supabase PostgreSQL(supabase-py PostgREST)로 완료됨.
 
 ---
 

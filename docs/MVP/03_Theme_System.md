@@ -1,13 +1,14 @@
 # 03. 테마 시스템
 
-Plant Counselor의 테마는 **두 축**을 가집니다.
+Plant Counselor의 테마는 **모드 한 축**만 가집니다.
 
 | 축 | 옵션 | 데이터 속성 |
 |----|------|-------------|
 | 모드 | light · dark · system | `data-theme="light"` 또는 `"dark"` |
-| 강조색 | emerald · sapphire · violet · sunset | `data-accent="<key>"` (emerald은 미설정) |
 
-두 속성은 `<html>` 루트에 부여되며, CSS는 attribute 셀렉터로 토큰을 덮어씁니다.
+> **강조색 선택 기능은 없습니다.** 강조색은 고정 올리브 팔레트(`--accent`)이며 라이트/다크 각각 별도 값을 가집니다. 과거에 있던 `data-accent` 속성은 제거되었고, `themeStore`/`theme-init.js` 모두 마운트 시 `removeAttribute("data-accent")`로 잔재를 정리합니다.
+
+`data-theme` 속성은 `<html>` 루트에 부여되며, CSS는 attribute 셀렉터로 토큰을 덮어씁니다.
 
 ## 1. 토큰 (`app/globals.css`)
 
@@ -16,9 +17,9 @@ Plant Counselor의 테마는 **두 축**을 가집니다.
 - **표면**: `--bg`, `--bg-elevated`, `--bg-subtle`, `--bg-muted`, `--bg-hover`
 - **테두리**: `--border`, `--border-strong`
 - **텍스트**: `--fg`, `--fg-secondary`, `--fg-muted`, `--fg-subtle`, `--fg-inverse`
-- **강조**: `--accent`, `--accent-hover`, `--accent-soft`, `--accent-muted`, `--accent-fg`, `--accent-contrast`
+- **강조**: `--accent`, `--accent-hover`, `--accent-soft`, `--accent-muted`, `--accent-fg`, `--accent-contrast` (고정 올리브)
 - **시맨틱**: `--positive`, `--warning`, `--danger`, `--info`
-- **상태(봉우리)**: `--st-seed`, `--st-bud`, `--st-flower`, `--st-fruit`, `--st-harvest`, `--st-wilting`, `--st-rot`
+- **상태(봉우리)**: `--st-bud`, `--st-flower`, `--st-fruit`, `--st-harvest`, `--st-wilting`, `--st-rot` (`--st-seed`는 없음 — 씨앗 단계 제거). `--st-wilting`은 **갈색**(시듦).
 - **shadow**: xs/sm/md/lg (모두 검정 기반, alpha 다름)
 - **radius**: xs(4) sm(6) md(8) lg(12) xl(16) pill(999)
 
@@ -26,14 +27,16 @@ Plant Counselor의 테마는 **두 축**을 가집니다.
 
 `[data-theme="dark"] { ... }` 블록이 같은 변수를 어두운 값으로 재선언. `color-scheme: dark` 도 함께 설정해 폼 컨트롤·스크롤바도 어두운 톤이 됩니다.
 
-### 1.3 강조색 오버라이드
+### 1.3 강조색 (고정 올리브)
+
+강조색은 사용자가 선택할 수 없는 고정 팔레트입니다. 라이트/다크에서 같은 변수를 다른 값으로 선언해, **라이트는 짙은 올리브**·**다크는 좀 더 밝은 올리브**로 보이게 합니다.
 
 ```css
-[data-accent="sapphire"]            { --accent: #2563EB; ... }
-[data-theme="dark"][data-accent="sapphire"] { --accent: #3B82F6; ... }
+:root              { --accent: #5C6B3F; ... }   /* light */
+[data-theme="dark"] { --accent: #8BAA5A; ... }  /* dark */
 ```
 
-라이트/다크 각각에 대해 강조색을 별도로 정의해, **다크에서 좀 더 밝게**·**라이트에서 좀 더 짙게** 자연스럽게 보이도록 합니다.
+`data-accent` 셀렉터는 globals.css에 더 이상 존재하지 않습니다.
 
 ## 2. 적용 메커니즘
 
@@ -41,9 +44,9 @@ Plant Counselor의 테마는 **두 축**을 가집니다.
 
 `public/theme-init.js` 가 다음을 수행:
 
-1. `localStorage["pc-theme"]` 에서 저장된 mode/accent를 읽고
+1. `localStorage["pc-theme"]` 에서 저장된 mode를 읽고
 2. mode가 system이면 `matchMedia("(prefers-color-scheme: dark)")` 로 해석
-3. `document.documentElement` 에 `data-theme` / `data-accent` 속성 부여
+3. `document.documentElement` 에 `data-theme` 속성을 부여하고 `data-accent` 는 `removeAttribute` 로 제거(잔재 정리)
 
 - **언제**: HTML `<head>`에서 `<Script strategy="beforeInteractive">`로 React 마운트 전에 실행.
 - **왜**: React 렌더 이전에 속성을 박아넣어야 첫 페인트에서 깜빡임(FOUC)이 없음.
@@ -51,8 +54,8 @@ Plant Counselor의 테마는 **두 축**을 가집니다.
 
 ### 2.2 Zustand store (`lib/store/themeStore.ts`)
 
-- **persist 미들웨어**: `localStorage["pc-theme"]` 에 `{mode, accent, resolved}` 저장.
-- **`setMode(m)` / `setAccent(a)`**: 즉시 DOM 속성 반영 + 스토어 갱신.
+- **persist 미들웨어**: `localStorage["pc-theme"]` 에 `{mode, resolved}` 저장 (accent 없음).
+- **`setMode(m)`**: 즉시 DOM 속성(`data-theme`) 반영 + `data-accent` 제거 + 스토어 갱신. (`setAccent`는 없음)
 - **`apply()`**: 마운트 시 1회 호출 — store와 DOM을 동기화 (저장된 모드가 system인 경우 OS 상태로 재해석).
 - **`attachThemeListener()`**: `prefers-color-scheme` change 이벤트 구독. `mode === "system"` 일 때만 재적용.
 
@@ -91,8 +94,8 @@ QueryClient와 함께 1회 마운트되어 테마 listener를 부착합니다. �
 
 ## 4. 검증
 
-- `mvp-home-light.png` — 라이트 + emerald
-- `mvp-home-dark-sapphire.png` — 다크 + sapphire (홈 모든 영역이 자연스럽게 변경됨)
-- `mvp-settings-theme.png` — 테마 탭 UI
+- `mvp-home-light.png` — 라이트 모드
+- `mvp-home-dark-sapphire.png` — 다크 모드 (홈 모든 영역이 자연스럽게 변경됨)
+- `mvp-settings-theme.png` — 테마 탭 UI (모드 선택만)
 
 사용자 시각 테스트(시스템 테스트 7장 `UI-1` ~ `UI-4`)와 함께 회귀 검증 권장.

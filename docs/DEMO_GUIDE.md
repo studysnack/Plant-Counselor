@@ -31,6 +31,7 @@
   - 3.2 정원 뷰와 리스트 뷰 조회
   - 3.3 식물 상세 화면
   - 3.4 식물 삭제
+  - 3.5 수확 바구니 (정원 뷰)
 - 4. 봉우리(Bud)
   - 4.1 봉우리 생성 (고민 / 일정)
   - 4.2 봉우리 상세 드로어
@@ -139,8 +140,14 @@ Python 프로세스 종료 후 `poetry run python run.py`를 다시 실행한다
 ### 0.5 핵심 용어
 
 - 식물(Plant): 분야 또는 카테고리. 예: 취업, 운동, 연애, 일상.
-- 봉우리(Bud): 식물에 속한 구체적 고민 또는 일정. 봉우리 → 꽃 → 열매 →
-  수확 생애주기를 가지며, 방치되면 시들음 → 썩음으로 전이된다.
+- 봉우리(Bud): 식물에 속한 구체적 고민 또는 일정. 봉우리(bud) → 꽃(flower) →
+  열매(fruit) → 수확(harvested) 생애주기를 가지며, 방치되면 시들음(wilting) →
+  썩음(rot)으로 전이된다. (과거의 "씨앗(seed)" 단계는 마이그레이션 004에서 제거됐고,
+  오래된 데이터는 `normalizeBudStatus`로 읽기 호환된다.)
+- 식물 시들음(Plant Wilting): 한 식물에 시든 봉우리가 N개 이상(기본 2,
+  `plant_wilt_bud_threshold`) 쌓이고 M일(기본 3, `plant_wilt_days`)이 지나면 식물 자체가
+  `status="wilting"`이 되며 `plant_wilting` 알림이 발생한다. 시든 식물은 정원에 계속
+  보이되 갈색으로 표시된다. 임계값은 garden_rules / 런타임 설정으로 조절한다.
 - 일반 일정(Calendar Event): 봉우리가 아닌 순수 일정. 진행률·생애주기가 없으며
   `calendar_events` 테이블에 저장된다. 캘린더에만 표시된다.
 - 스코프(세션): 채팅이 어떤 맥락에서 동작하는지를 나타낸다. global(전체),
@@ -180,6 +187,9 @@ TanStack Query 캐시를 무효화한다(`SKILL_INVALIDATIONS` 매핑).
   - bud 스코프: "현재 상담 세션: '{식물명}' 식물의 봉우리 '{봉우리 제목}' (bud_id=...)"
   - global / calendar: 별도 라인 없음
 - 정원 현황: 활성 고민/일정 수, 시들음 수, 이번 달 수확 수
+- 응답 톤 가이드(`_TONE_GUIDE`): 사용자 설정 톤(상담가 counselor / 비서 assistant /
+  친구 friend, 기본 counselor)이 프롬프트에 반영된다. `chat.py`가 `user.tone`을 읽어
+  orchestrator에 전달한다.
 - 식물 목록(최대 10개, id 포함)
 - 핵심 모델 설명(식물/봉우리/상태)
 - 행동 원칙: 즉시 실행(확인 질문 금지), 의도 판단, 복합 작업 시 think 우선,
@@ -281,8 +291,10 @@ user_id, db, 각 서비스 인스턴스, 그리고 현재 scope/scope_id가 담�
   놓인다.
 - 동작 원리: `GET /plants`로 목록을, `GET /buds`로 봉우리를 조회해 식물별로 묶는다.
   방향키 이동과 확대·축소 뒤 스크롤 위치는 배율을 반영해 보정한다. 픽셀 식물은
-  `GardenPlantVisual.tsx`가 Figma `05 Plant Pixel Assets`의 no-pot extension 좌표로
-  렌더링하며, 봉우리가 없으면 성장 레이어를 만들지 않는다.
+  스프라이트 PNG가 아니라 `GardenPlantVisual.tsx`가 `Pixel` 사각형들을 좌표로 찍어
+  벡터 픽셀아트로 그린다. 봉우리가 없으면 성장 레이어를 만들지 않는다. 화분 줄의
+  맨 왼쪽 슬롯에는 수확 바구니가 항상 놓인다(3.5 참고). 시든 식물(`status="wilting"`)은
+  식물 전체에 갈색 필터(`WILTED_PLANT_FILTER`)가 적용된다.
 
 ### 3.3 식물 상세 화면
 
@@ -292,7 +304,9 @@ user_id, db, 각 서비스 인스턴스, 그리고 현재 scope/scope_id가 담�
   2. 상세 페이지에서 활성/수확/포기 통계와 봉우리 목록, 필터(전체/진행 중/완료) 확인
 - 기대 결과: `/plants/{id}` 상세 페이지가 열리고 헤더 통계와 봉우리 목록이 표시된다.
 - 동작 원리: `GET /plants/{id}`와 `GET /buds?plant_id={id}` 호출. 목록 캐시가 있으면
-  헤더는 즉시 채워진다(initialData).
+  헤더는 즉시 채워진다(initialData). 헤더의 활성/수확/포기 통계는 plants 테이블의 카운트
+  컬럼이 아니라 봉우리 목록에서 실시간으로 계산한다(테이블 카운트 컬럼은
+  유지되지 않는 사장 컬럼이다).
 
 ### 3.4 식물 삭제
 
@@ -306,6 +320,22 @@ user_id, db, 각 서비스 인스턴스, 그리고 현재 scope/scope_id가 담�
   - AI 경로: `delete_plant` 스킬. "행동 원칙 > 삭제·포기" 규칙에 따라 명확한 삭제
     의사가 있을 때만 실행한다. 세션 권한(1.4): 전체 세션에서는 모든 식물 삭제 가능,
     특정 식물 세션에서는 그 식물만 삭제 가능(`can_delete_plant`).
+
+### 3.5 수확 바구니 (정원 뷰)
+
+- 사전 조건: 4.6으로 봉우리를 하나 이상 수확(harvested)해 두고 진행해 주세요.
+- 절차:
+  1. `/plants` 정원 뷰에서 화분 줄 맨 왼쪽의 줄무늬 바구니를 확인한다.
+  2. 바구니를 클릭해 우측 사이드바를 연다.
+  3. 검색창과 식물 라벨(다중 선택) 필터로 열매를 좁힌다.
+  4. 열매 하나를 클릭해 과거 대화 팝업(읽기 전용)을 연다.
+- 기대 결과: 수확한 열매는 식물에서 사라지고 바구니에 쌓이며, 각 열매에는 출신 식물명이
+  붙는다. 라벨을 선택하면 비선택 식물의 열매는 흐려진다. 열매를 클릭하면 그 봉우리의
+  지난 대화 기록만 읽기 전용으로 보이고, 추가 채팅은 불가능하다.
+- 동작 원리: 정원은 status가 harvested인 봉우리를 식물에서 제외하고 바구니
+  (`GardenHarvestBasket`, 줄무늬 벡터 바구니)로 모은다. 사이드바(`BasketSidebar`)는
+  제목·식물명·세부로 검색하고 식물 라벨 다중 선택으로 필터한다. 팝업
+  (`FruitHistoryPopup`)은 `getHistory("bud", bud_id)`로 과거 대화만 불러온다.
 
 ---
 
@@ -348,6 +378,9 @@ user_id, db, 각 서비스 인스턴스, 그리고 현재 scope/scope_id가 담�
 - 동작 원리: `update_bud_progress` 스킬. bud_id를 모르면 "봉우리 탐색" 규칙에 따라
   먼저 `list_buds`를 호출한다. 자동 전이 임계값은 BudService에 정의돼 있다.
   세션 권한(1.4): 해당 봉우리/식물 세션 또는 전체 세션에서만 수정 가능.
+  소생 불가(no-revival): 이미 시들거나 썩은 봉우리(또는 시든 식물에 속한 봉우리)는
+  진행률을 올리거나 성장 단계(bud/flower/fruit/harvested)로 되돌릴 수 없다. 대화·시들음
+  진행(wilting→rot)·포기는 여전히 가능하다.
 
 ### 4.4 상태 직접 변경
 
@@ -650,11 +683,13 @@ user_id, db, 각 서비스 인스턴스, 그리고 현재 scope/scope_id가 담�
   2. 타임 트래블에서 시간을 충분히(예: +14일) 이동(9.14 참고)
   3. 이동 시 자동 전환 스캔이 실행됨. 또는 "전환 스캔 즉시 실행" 클릭
   4. 일반 사용자 화면 사이드바의 알림 종 아이콘 확인
-- 기대 결과: 오래 방치된 봉우리는 시들음 → 썩음으로 전이되고, 마감 임박 봉우리에는
-  마감 경고 알림이 생성된다.
+- 기대 결과: 오래 방치된 봉우리는 시들음 → 썩음으로 전이되고, 시든 봉우리가 임계값
+  이상 쌓인 식물은 식물 자체가 시들며(갈색), 마감 임박 봉우리에는 마감 경고 알림이
+  생성된다.
 - 동작 원리: TransitionService가 `rs.now()/today()`(타임 트래블 반영) 기준으로 wilting/rot
-  전이와 deadline 경고를 계산해 notifications에 push한다. 알림 종류:
-  bud_wilting, bud_rot, deadline_warning.
+  전이, 식물 단위 시들음(시든 봉우리 N개 이상 + M일 경과), deadline 경고를 계산해
+  notifications에 push한다. 알림 종류: bud_wilting, bud_rot, plant_wilting,
+  deadline_warning.
 
 ### 8.2 알림 상세 보기와 전체 기록 탭
 
@@ -694,8 +729,8 @@ user_id, db, 각 서비스 인스턴스, 그리고 현재 scope/scope_id가 담�
 
 - 절차: `/admin` 접속
 - 기대 결과: 사용자·식물·봉우리·AI 세션·토큰 추정 통계가 표시된다.
-- 동작 원리: `GET /admin/stats`. AI 세션 수와 토큰 추정은 `backend/logs/chat/*.json`
-  로그 파일을 집계한다.
+- 동작 원리: `GET /admin/stats`. AI 세션 수와 토큰 추정은 AI 로그를 집계한다(아래
+  9.3 참고: Supabase `ai_logs` 테이블 + 로컬 파일 미러를 병합).
 
 ### 9.2 사용자 관리와 역할 변경
 
@@ -713,7 +748,10 @@ user_id, db, 각 서비스 인스턴스, 그리고 현재 scope/scope_id가 담�
 - 절차: `/admin/logs`에서 로그 목록 확인 후 항목 클릭
 - 기대 결과: 시스템 프롬프트, LLM 호출 내역, 스킬 호출, 이벤트가 슬라이드 패널에 표시된다.
 - 동작 원리: `GET /admin/logs`(목록), `GET /admin/logs/{filename}`(상세). 각 채팅은
-  `backend/logs/chat/`에 JSON으로 기록된다. 대화 기록(DB)과는 별개의 저장소다.
+  `app/ai/log_store.py`가 Supabase `ai_logs` 테이블(마이그레이션 002)에 저장하고
+  `backend/logs/chat/`에 로컬 파일로도 미러링한다. 조회 시 DB와 파일을 병합하고 파일명
+  기준으로 중복을 제거한다(DB가 비었거나 없으면 파일만 사용). 이 대화 로그는 대화
+  기록(DB conversations)과는 별개의 저장소다.
 - **LLM 오류 표시**: Gemini 호출이 실패한 세션은 목록 테이블 `상태` 칸에 빨간
   `오류 N` 배지가 뜨고, 상세 패널에 빨간 `오류 (N)` 탭이 추가된다. 탭을 열면 오류
   종류 배지(서버 과부하 503 / 한도 초과 429 / 인증 / 모델 없음 404 / 시간 초과 /
@@ -951,7 +989,8 @@ user_id, db, 각 서비스 인스턴스, 그리고 현재 scope/scope_id가 담�
 사용자:
 - POST /chat/message (SSE)
 - GET /plants, GET /plants/{id}, PATCH /plants/{id}, DELETE /plants/{id}
-- GET /buds, GET /buds/{id}, PATCH /buds/{id}, PATCH /buds/{id}/progress
+- GET /buds, GET /buds/{id}, PATCH /buds/{id}, PATCH /buds/{id}/move (다른 식물로 이동),
+  DELETE /buds/{id}, PATCH /buds/{id}/progress
 - GET /calendar, POST /calendar/events, PATCH /calendar/events/{id}, DELETE /calendar/events/{id}
 - GET /stats/summary, GET /briefing/today
 - GET /conversations/list, GET /conversations, DELETE /conversations, POST /conversations/search

@@ -3,8 +3,11 @@
 > **주의**: 이 디렉터리는 2026-05-27 시점 역사 자료다. 현재 구현 명세가 아니다.
 > 최신 작업은 루트 `AGENTS.md`, `docs/README.md`, 실제 코드를 우선한다.
 >
-> 이 문서 묶음에는 제거된 SQLAlchemy/SQLite 계층, 쿠키 기반 refresh 인증,
-> 강조색 선택, 15개 스킬 설명이 남아 있다.
+> 이 문서 묶음에는 제거된 SQLAlchemy/SQLite 계층, 쿠키 기반 refresh 인증(현재
+> Supabase Auth + Google OAuth), 강조색 선택이 남아 있다. 스킬은 15개가 아니라
+> 현재 **20개**이고, 봉우리 생애주기는 **bud → flower → fruit → harvested /
+> wilting → rot** (씨앗 seed 제거)다. `10_Complete_Implementation_State.md`가
+> 그나마 현재 코드에 가장 가깝게 보정돼 있다.
 
 > **"고민과 일정을 식물 생애주기에 비유해 함께 가꾸는 AI 정원사."**
 
@@ -20,7 +23,7 @@
 | [01](01_Architecture.md) | **아키텍처** | 계층 구조·요청 흐름도·외부 통합·인증·스케줄러 | 상세 |
 | [02](02_UI_Pages_And_Components.md) | **UI 페이지 & 컴포넌트** | 페이지/컴포넌트별 동작·상태·인터랙션 명세 | 상세 |
 | [03](03_Theme_System.md) | **테마 시스템** | 디자인 토큰·테마 전환·Pre-hydration·사용 가이드 | 상세 |
-| [04](04_AI_Chat_And_Skills.md) | **AI 채팅 & 스킬** | ReAct 루프·15개 스킬·프롬프트 설계·멀티스킬 검증 | 최상세 |
+| [04](04_AI_Chat_And_Skills.md) | **AI 채팅 & 스킬** | ReAct 루프·스킬(당시 15개, 현재 20개)·프롬프트 설계·멀티스킬 검증 | 최상세 |
 | [05](05_Backend_Code_Walkthrough.md) | **백엔드 코드 워크스루** | 모든 Python 파일/함수/변수/설계 이유 | 최상세 |
 | [06](06_API_Reference.md) | **API 레퍼런스** | REST 엔드포인트 전체 명세 | 참조 |
 | [07](07_System_Test_Plan.md) | **시스템 테스트** | 60+ 테스트 케이스 | 참조 |

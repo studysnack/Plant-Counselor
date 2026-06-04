@@ -8,12 +8,12 @@
 
 ### 로그인 (`app/(auth)/login/page.tsx`)
 
-- **목적**: 가입·로그인 단일 페이지. `mode` 상태로 토글.
-- **데이터**: 자체 폼 상태. 마운트 시 `configureClient()` 만 호출.
-- **검증**: 비밀번호 일치 + 4자 이상. 백엔드 에러는 그대로 표시.
-- **성공 시**: `setSession(token, user)` → `router.replace("/")`.
+- **목적**: Google OAuth 단일 로그인 페이지 (Supabase Auth). 자체 가입/비밀번호 폼 없음.
+- **레이아웃**: 좌측 브랜드 패널 + 우측 "Google로 계속하기" 버튼.
+- **동작**: `supabase.auth.signInWithOAuth({ provider: "google", redirectTo: …/home })`. 에러는 상단 배너로 표시.
+- **이미 로그인 시**: `accessToken` 있으면 `router.replace("/home")`.
 
-### 홈 (`app/(app)/page.tsx`)
+### 홈 (`app/(app)/home/page.tsx`)
 
 - **블록**: 인삿말 + 브리핑 → 통계 4카드 → 식물 보드(최대 5개 + "+새 식물" CTA) → 시들 봉우리(최대 6개).
 - **우측 상단 AI 대화 버튼**: 공통 `AiChatButton`(fixed). 채팅 패널 열리면 숨김.
@@ -55,8 +55,10 @@
   - ChatPanel이 열려있으면 `right: chatWidth`로 함께 이동.
   - 자체 z-index: 45 (ChatPanel z:40보다 위, 백드롭 z:39).
   - 쿼리 키: `QK.bud(budId)` (ChatPanel과 동일 캐시 항목 공유).
-  - 진행 막대·메타 4그리드·이력 타임라인.
+  - 진행 막대(편집 가능 시 슬라이더 + "왜 변경하였나요?" 사유 팝업)·메타 4그리드·이력 타임라인.
   - **빠른 액션** (footer): "+20%", "수확", "포기" → `CustomEvent("pc-chat-prompt")` → ChatPanel 자동 전송.
+  - **봉우리 이동**: footer 셀렉트로 다른 식물 선택 → `moveBud()` (`PATCH /buds/{id}/move`). 자기 식물·archived 식물은 후보에서 제외.
+  - **AI 상담** 버튼 + **봉우리 삭제**(재확인 모달).
 
 ### 캘린더 (`app/(app)/calendar/page.tsx`)
 
@@ -95,10 +97,10 @@
 
 | 탭 | 항목 |
 |----|------|
-| 계정 | 닉네임 표시, 비밀번호 변경, 로그아웃 |
-| AI | Gemini API 키(암호화 저장), 응답 톤 3종 |
+| 계정 | 이름·이메일(Google에서 가져옴), 로그아웃, 계정 삭제(이메일 입력 재확인) |
+| AI | Gemini API 키(암호화 저장), 응답 톤 3종(따뜻한 상담사/담백한 비서/친구) — 톤은 AI 프롬프트에 실제 반영됨 |
 | 정원 규칙 | wilting_days, rot_disappear_days, deadline_warn_days — `NumberStepper` |
-| 테마 | 모드(light/dark/system) + 강조색(emerald/sapphire/violet/sunset) |
+| 테마 | 모드(light/dark/system)만. 강조색 선택은 없음(고정 올리브 팔레트) |
 | 정보 | 버전·데이터 정책·만든 곳 |
 
 - **`NumberStepper`**: −/+ 28px 버튼, tabular-nums.
@@ -110,9 +112,9 @@
 
 ### `components/layout/Sidebar.tsx`
 
-- **너비 56px**. 로고 → 5개 nav(홈/정원/캘린더/대화기록/…) → 구분선 → AI 정원사 토글 → footer(알림·설정·아바타).
+- **너비 56px**. 로고 → 4개 nav(홈/정원/캘린더/대화기록) → 구분선 → AI 정원사 토글 → footer(알림·설정·아바타).
 - **툴팁**: hover 시 우측에 검정 배경 칩으로 라벨 노출. CSS 전용.
-- **알림 배지**: 빨간 9+ 표시. `useQuery({queryKey: QK.notifications(), refetchInterval: 30s})`.
+- **알림 배지**: 빨간 9+ 표시. `useQuery({queryKey: QK.notifications(), refetchInterval: 15s, refetchIntervalInBackground: true})`.
 - **알림 popover**: `NotificationsPopover`가 사이드바 옆 fixed 위치.
 - **hover 프리페치**:
   - `/plants` 링크: `QK.plants()`, `QK.buds()` 프리페치
@@ -121,10 +123,11 @@
 
 ### `components/layout/NotificationsPopover.tsx`
 
-- **데이터**: `listNotifications()` 결과를 시간 역순으로 표시.
+- **탭**: "안 읽음(N)" / "전체 기록" — `전체` 탭은 활성화 시에만 `include_read` 목록을 페치.
+- **데이터**: `listNotifications()` 결과를 시간 역순으로 표시. 항목 클릭 시 상세 펼침(관리자 메시지 본문 포함).
 - **종류별 색**: bud_rot=danger, bud_wilting=warning, deadline_warning=info.
 - **닫기**: 외부 클릭(`mousedown`) 또는 Escape.
-- **모두 읽음**: `Promise.all`로 일괄 ack.
+- **모두 읽음**: `ackAllNotifications()` (`POST /notifications/ack-all`) 일괄 ack.
 
 ### `components/chat/ChatPanel.tsx`
 
@@ -153,9 +156,12 @@
 
 ```typescript
 const SKILL_INVALIDATIONS = {
-  create_plant:        ["plants", "stats", "briefing"],
-  delete_plant:        ["plants", "buds", "stats", "briefing"],
-  create_bud:          ["buds", "plants", "stats", "briefing", "calendar"],
+  create_plant:          ["plants", "stats", "briefing"],
+  delete_plant:          ["plants", "buds", "stats", "briefing"],
+  create_bud:            ["buds", "plants", "stats", "briefing", "calendar"],
+  create_calendar_event: ["calendar"],
+  update_calendar_event: ["calendar"],
+  delete_calendar_event: ["calendar"],
   update_bud_status:   ["buds", "plants", "stats", "briefing", "bud"],
   update_bud_progress: ["buds", "bud"],
   harvest_bud:         ["buds", "plants", "stats", "briefing", "bud"],
