@@ -205,7 +205,7 @@ export function GardenPlantVisual({ name, buds, actions, onBudClick, wilted = fa
 
 // ── Harvest basket (vector, pixel-art style — striped like a woven basket) ────
 
-export const BASKET_VISUAL_H = 150;
+export const BASKET_VISUAL_H = 137;
 
 const BASKET = {
   rim: "#B07A41",
