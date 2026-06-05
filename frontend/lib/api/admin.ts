@@ -199,7 +199,7 @@ export const setTimeOffset = (body: {
   add_days?: number;
   add_hours?: number;
   reset?: boolean;
-}) => apiPatch<{ virtual_now: string; offset_seconds: number; offset_days: number }>(
+}) => apiPatch<VirtualTime>(
   "/admin/controller/time",
   body
 );

@@ -566,6 +566,9 @@ Supabase 세션은 localStorage 기반이므로 `proxy.ts`에서 쿠키를 검�
 - `rs.real_now()`와 `rs.now()`는 timezone-aware datetime을 반환해야 한다.
   ISO 문자열에 `+09:00` offset이 포함되어야 관리자 화면이나 클라이언트가 서버 시간을
   UTC로 오해하지 않는다.
+- 관리자 컨트롤러의 타임 트래블 UI는 브라우저 로컬 시간이나 UTC formatter로 시간을
+  재계산하지 말고 `/admin/controller/time`의 `real_now`, `virtual_now`를 KST로
+  표시한다.
 
 사용자에게 보이는 날짜 로직을 추가할 때 `datetime.utcnow()`를 직접 쓰기 전에
 `rs.now()` 또는 `rs.today()`가 맞는지 먼저 판단한다.

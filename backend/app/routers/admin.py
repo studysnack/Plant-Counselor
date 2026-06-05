@@ -454,8 +454,10 @@ def set_virtual_time(body: TimeOffsetBody, admin=Depends(require_admin)):
         "ok": True,
         "data": {
             "virtual_now": rs.now().isoformat(),
+            "real_now": rs.real_now().isoformat(),
             "offset_seconds": rs.time_offset_seconds(),
             "offset_days": round(rs.time_offset_seconds() / 86400, 2),
+            "offset_hours": round(rs.time_offset_seconds() / 3600, 2),
         },
     }
 
