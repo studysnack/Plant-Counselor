@@ -10,7 +10,7 @@ import { useChatStore } from "@/lib/store/chatStore";
 import { useAuthStore } from "@/lib/store/authStore";
 import { MarkdownText } from "@/lib/markdown";
 import { AiChatButton } from "@/components/chat/AiChatButton";
-import { STATUS_LABEL, STATUS_PILL, STATUS_COLOR_VAR, dominantStatus, isActive, normalizeBudStatus, BudStatus } from "@/lib/status";
+import { isActive, normalizeBudStatus } from "@/lib/status";
 import { QK } from "@/lib/queryKeys";
 import { GardenSkeleton, PlantCardSkeleton } from "@/components/ui/Skeleton";
 import { GardenPlantVisual, GardenHarvestBasket, LAYER_H, POT_H, BASKET_VISUAL_H } from "@/components/plants/GardenPlantVisual";
@@ -36,27 +36,39 @@ function getGardenPlantRow(index: number) {
   return index % 2;
 }
 
-// ── Status bar (list view) ─────────────────────────────────
+// ── Progress bar (list view) ───────────────────────────────
 
-const STATUS_ORDER: BudStatus[] = ["bud","flower","fruit","wilting","harvested","rot"];
-
-function StatusBar({ buds }: { buds: Bud[] }) {
-  const counts = STATUS_ORDER.map(s => buds.filter(b => normalizeBudStatus(b.status) === s).length);
-  const total = counts.reduce((a, b) => a + b, 0);
-  if (!total) return <div className="progress-track" style={{ background: "var(--bg-muted)" }} />;
+function PlantProgressBar({ value }: { value: number }) {
   return (
-    <div style={{ display: "flex", height: 4, borderRadius: 999, overflow: "hidden", background: "var(--bg-muted)" }}>
-      {STATUS_ORDER.map((s, i) => counts[i] > 0 && <div key={s} title={`${STATUS_LABEL[s]} ${counts[i]}`} style={{ flex: counts[i], background: STATUS_COLOR_VAR[s] }} />)}
+    <div
+      className="progress-track"
+      role="progressbar"
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={value}
+      aria-label="식물 평균 진행률"
+      style={{ height: 5, background: "var(--bg-muted)" }}
+    >
+      <div className="progress-fill" style={{ width: `${value}%` }} />
     </div>
   );
+}
+
+function plantProgressValue(bud: Bud) {
+  return Math.max(0, Math.min(100, bud.progress));
 }
 
 // ── List view card ─────────────────────────────────────────
 
 function PlantCard({ plant, buds, onClick, onChat }: { plant: Plant; buds: Bud[]; onClick: () => void; onChat: () => void }) {
   const active = buds.filter(b => isActive(b.status));
-  const avg = active.length ? Math.round(active.reduce((s, b) => s + b.progress, 0) / active.length) : 0;
-  const dom = dominantStatus(active);
+  const progressBuds = buds.filter((bud) => {
+    const status = normalizeBudStatus(bud.status);
+    return status !== "harvested" && status !== "rot";
+  });
+  const avg = progressBuds.length
+    ? Math.round(progressBuds.reduce((sum, bud) => sum + plantProgressValue(bud), 0) / progressBuds.length)
+    : 0;
   return (
     <div className="card card-hover" style={{ padding: 16, cursor: "pointer", display: "flex", flexDirection: "column", gap: 14 }} onClick={onClick}>
       <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
@@ -64,11 +76,10 @@ function PlantCard({ plant, buds, onClick, onChat }: { plant: Plant; buds: Bud[]
           <div className="t-h2" style={{ color: "var(--fg)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{plant.name}</div>
           <div className="t-caption" style={{ color: "var(--fg-muted)", marginTop: 3 }}>{plant.description || "..."}</div>
         </div>
-        {active.length > 0 && <span className={STATUS_PILL[dom]}><span className="pill-dot" style={{ background: "currentColor" }} />{STATUS_LABEL[dom]}</span>}
       </div>
-      <StatusBar buds={buds} />
+      <PlantProgressBar value={avg} />
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <span className="t-caption" style={{ color: "var(--fg-muted)" }}>{avg}% · {active.length}개 활성</span>
+        <span className="t-caption" style={{ color: "var(--fg-muted)" }}>{avg}% · {progressBuds.length}개 봉우리 · {active.length}개 진행 중</span>
         <button className="btn btn-ghost btn-sm" onClick={e => { e.stopPropagation(); onChat(); }}>상담</button>
       </div>
     </div>

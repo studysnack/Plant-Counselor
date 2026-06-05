@@ -133,7 +133,7 @@ export default function CalendarPage() {
   }
 
   return (
-    <div className="app-page app-page-wide" style={{ "--page-pad-y": "24px" } as CSSProperties}>
+    <div className="app-page app-page-calendar" style={{ "--page-pad-y": "24px" } as CSSProperties}>
       {/* Top-right AI chat button (hides while the chat panel is open) */}
       <AiChatButton style={{ position: "fixed", top: 24, right: 28, zIndex: 30 }} />
 

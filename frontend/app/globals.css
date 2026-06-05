@@ -216,6 +216,7 @@ a { color: inherit; text-decoration: none; }
 
 .app-page-narrow { --page-max: 1040px; }
 .app-page-wide { --page-max: 1440px; }
+.app-page-calendar { --page-max: 1180px; }
 .app-page-viewport {
   width: 100%;
   min-height: 100vh;
@@ -237,9 +238,10 @@ a { color: inherit; text-decoration: none; }
 
 .calendar-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(300px, 360px);
+  grid-template-columns: minmax(0, min(100%, 820px)) minmax(300px, 340px);
   grid-template-rows: clamp(440px, 52vh, 560px);
   align-items: stretch;
+  justify-content: center;
   gap: 16px;
   margin-bottom: 12px;
 }

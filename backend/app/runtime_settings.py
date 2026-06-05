@@ -6,7 +6,7 @@ saved/loaded via JSON snapshot (admin controller page).
 from __future__ import annotations
 import json
 import logging
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -143,10 +143,15 @@ def _tz_offset_hours() -> int:
     return int(_store.get("app_timezone_offset_hours", 9) or 0)
 
 
+def app_timezone() -> timezone:
+    """Timezone object for the app's user-facing clock. Default is KST (UTC+9)."""
+    return timezone(timedelta(hours=_tz_offset_hours()))
+
+
 def real_now() -> datetime:
     """Wall-clock 'now' in the app's local timezone (KST by default), WITHOUT
     the time-travel offset. Used as the baseline for the admin time-travel view."""
-    return datetime.utcnow() + timedelta(hours=_tz_offset_hours())
+    return datetime.now(app_timezone())
 
 
 def now() -> datetime:
