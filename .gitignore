@@ -89,3 +89,6 @@ coverage/
 .claude/
 
 CLAUDE.md
+
+# ── Team-only docs (reports/notes shared among the team, not via git) ─
+docs/for_team/
