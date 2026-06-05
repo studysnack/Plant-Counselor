@@ -231,19 +231,28 @@ function SqlExecutor() {
 
 // ── Time Travel ───────────────────────────────────────────────────────────────
 
-/** Format a Date as "YYYY-MM-DD HH:MM:SS" in UTC. */
-function fmtUtc(d: Date): string {
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return (
-    `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ` +
-    `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}`
-  );
+const SEOUL_TIME_ZONE = "Asia/Seoul";
+
+function fmtSeoul(d: Date): string {
+  const parts = new Intl.DateTimeFormat("ko-KR", {
+    timeZone: SEOUL_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(d);
+  const get = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((part) => part.type === type)?.value ?? "00";
+  return `${get("year")}-${get("month")}-${get("day")} ${get("hour")}:${get("minute")}:${get("second")}`;
 }
 
 function Clock({
   label, date, accent, sub,
-}: { label: string; date: Date; accent?: boolean; sub?: string }) {
-  const timeStr = fmtUtc(date);
+}: { label: string; date: Date | null; accent?: boolean; sub?: string }) {
+  const timeStr = date ? fmtSeoul(date) : "---- -- -- --:--:--";
   const [datePart, timePart] = timeStr.split(" ");
   return (
     <div style={{
@@ -274,8 +283,12 @@ function TimeTravelSection() {
 
   // Offset stored locally so both clocks can tick smoothly without constant API calls
   const [offsetSeconds, setOffsetSeconds] = useState(0);
-  // Live tick — updates every second
-  const [now, setNow] = useState(() => new Date());
+  const [serverClock, setServerClock] = useState<{
+    realBaseMs: number;
+    virtualBaseMs: number;
+    syncedAtMs: number;
+  } | null>(null);
+  const [tickMs, setTickMs] = useState(0);
   const [scanLog, setScanLog] = useState<{ time: string; ok: boolean; msg: string } | null>(null);
   const [customDays, setCustomDays] = useState("");
   const [customHours, setCustomHours] = useState("");
@@ -288,17 +301,25 @@ function TimeTravelSection() {
     staleTime: Infinity,
   });
   useEffect(() => {
-    if (initRes?.ok) setOffsetSeconds(initRes.data.offset_seconds);
+    if (!initRes?.ok) return;
+    setOffsetSeconds(initRes.data.offset_seconds);
+    setServerClock({
+      realBaseMs: Date.parse(initRes.data.real_now),
+      virtualBaseMs: Date.parse(initRes.data.virtual_now),
+      syncedAtMs: Date.now(),
+    });
   }, [initRes]);
 
   // Tick every second
   useEffect(() => {
-    const id = setInterval(() => setNow(new Date()), 1000);
+    const id = setInterval(() => setTickMs(Date.now()), 1000);
+    setTickMs(Date.now());
     return () => clearInterval(id);
   }, []);
 
-  const realDate = now;
-  const virtualDate = new Date(now.getTime() + offsetSeconds * 1000);
+  const elapsedMs = serverClock && tickMs ? tickMs - serverClock.syncedAtMs : 0;
+  const realDate = serverClock ? new Date(serverClock.realBaseMs + elapsedMs) : null;
+  const virtualDate = serverClock ? new Date(serverClock.virtualBaseMs + elapsedMs) : null;
   const isShifted = offsetSeconds !== 0;
 
   // Format offset for display
@@ -320,14 +341,19 @@ function TimeTravelSection() {
       const res = await setTimeOffset(body);
       if (res.ok) {
         setOffsetSeconds(res.data.offset_seconds);
+        setServerClock({
+          realBaseMs: Date.parse(res.data.real_now),
+          virtualBaseMs: Date.parse(res.data.virtual_now),
+          syncedAtMs: Date.now(),
+        });
         // Auto-run transition scan with the new virtual time
         const scanRes = await triggerScheduler();
-        const scanTime = fmtUtc(new Date());
+        const scanTime = fmtSeoul(new Date());
         setScanLog({
           time: scanTime,
           ok: scanRes.ok,
           msg: scanRes.ok
-            ? `전환 스캔 완료 (${new Date(Date.now() + res.data.offset_seconds * 1000).toISOString().slice(0, 10)} 기준)`
+            ? `전환 스캔 완료 (${fmtSeoul(new Date(Date.parse(res.data.virtual_now))).slice(0, 10)} 기준)`
             : "스캔 실패",
         });
       }
@@ -361,7 +387,7 @@ function TimeTravelSection() {
             오프셋 활성: {offsetLabel}
           </span>
         )}
-        <span style={{ fontSize: 11, color: "rgba(255,255,255,0.3)", marginLeft: "auto" }}>UTC 기준</span>
+        <span style={{ fontSize: 11, color: "rgba(255,255,255,0.3)", marginLeft: "auto" }}>KST 기준</span>
       </div>
 
       {/* Dual clock */}
