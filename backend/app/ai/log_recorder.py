@@ -1,7 +1,7 @@
 from __future__ import annotations
 import logging
-from datetime import datetime
 
+import app.runtime_settings as rs
 from app.ai import log_store
 
 logger = logging.getLogger(__name__)
@@ -15,7 +15,7 @@ class LogRecorder:
     """
 
     def __init__(self, user_id: str, text: str):
-        now = datetime.now()
+        now = rs.real_now()
         self._filename = f"{now.strftime('%Y%m%d_%H%M%S_%f')[:22]}_{user_id[:8]}.json"
         self._user_id = user_id
         self._created_at = now.isoformat()
@@ -69,7 +69,7 @@ class LogRecorder:
             "error": error,
             "kind": kind,
             "cause": cause,
-            "time": datetime.now().isoformat(),
+            "time": rs.real_now().isoformat(),
         })
         for entry in self._data["llm_calls"]:
             if entry["call"] == call_n:
@@ -79,7 +79,7 @@ class LogRecorder:
 
     def log_event(self, event_type: str, detail: str = "") -> None:
         self._data["events"].append({
-            "time": datetime.now().isoformat(),
+            "time": rs.real_now().isoformat(),
             "type": event_type,
             "detail": detail,
         })

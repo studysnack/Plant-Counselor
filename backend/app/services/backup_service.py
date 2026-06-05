@@ -14,11 +14,12 @@ import io
 import json
 import logging
 import zipfile
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from supabase import Client
+
+import app.runtime_settings as rs
 
 logger = logging.getLogger(__name__)
 
@@ -83,11 +84,12 @@ class BackupService:
             data[table] = rows
             counts[table] = len(rows)
 
-        created_at = datetime.utcnow().isoformat()
+        created_at = rs.real_now().isoformat()
         meta = {"version": _BACKUP_VERSION, "created_at": created_at, "counts": counts}
 
-        # Filename uses real UTC time (an external artifact, not affected by time travel).
-        stamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        # Filename uses the real wall-clock (KST), not the time-travel offset —
+        # a backup is an external artifact and should reflect when it was actually made.
+        stamp = rs.real_now().strftime("%Y%m%d_%H%M%S")
         filename = f"backup_{stamp}.zip"
         path = BACKUP_DIR / filename
 

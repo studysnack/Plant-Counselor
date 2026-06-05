@@ -9,7 +9,7 @@ Provides:
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -63,7 +63,7 @@ def get_stats(admin=Depends(require_admin), db: Client = Depends(get_db)):
     total_sessions = len(rows)
 
     # Sessions in last 7 days — compare YYYYMMDD filename prefix directly.
-    cutoff_date = (datetime.utcnow() - timedelta(days=7)).strftime("%Y%m%d")
+    cutoff_date = (rs.real_now() - timedelta(days=7)).strftime("%Y%m%d")
     recent_sessions = sum(1 for r in rows if (r.get("filename") or "")[:8] >= cutoff_date)
 
     # Token estimate across all logs
@@ -449,7 +449,6 @@ def set_virtual_time(body: TimeOffsetBody, admin=Depends(require_admin)):
             delta += int(body.add_hours * 3600)
         rs.set("time_offset_seconds", current + delta)
 
-    from datetime import datetime
     return {
         "ok": True,
         "data": {
