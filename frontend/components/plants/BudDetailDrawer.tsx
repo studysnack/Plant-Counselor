@@ -1,14 +1,15 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { getBud, setBudProgress, deleteBud, moveBud } from "@/lib/api/buds";
+import { getBud, patchBud, setBudProgress, deleteBud, moveBud } from "@/lib/api/buds";
 import { listPlants } from "@/lib/api/plants";
 import { useChatStore } from "@/lib/store/chatStore";
 import {
   STATUS_LABEL, STATUS_PILL, normalizeBudStatus, isDone,
 } from "@/lib/status";
 import { QK } from "@/lib/queryKeys";
+import { formatKstDate } from "@/lib/time";
 
 export function BudDetailDrawer({ budId, onClose }: { budId: string; onClose: () => void }) {
   const { open: chatOpen, chatWidth, openWith } = useChatStore();
@@ -24,9 +25,21 @@ export function BudDetailDrawer({ budId, onClose }: { budId: string; onClose: ()
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [editingMeta, setEditingMeta] = useState(false);
+  const [titleDraft, setTitleDraft] = useState("");
+  const [detailDraft, setDetailDraft] = useState("");
+  const [metaSaving, setMetaSaving] = useState(false);
+  const [metaError, setMetaError] = useState("");
 
   const bud = data?.ok ? data.data.bud : null;
   const history = data?.ok ? data.data.history : [];
+
+  useEffect(() => {
+    if (!bud || editingMeta) return;
+    setTitleDraft(bud.title);
+    setDetailDraft(bud.detail ?? "");
+  }, [bud, editingMeta]);
+
   if (!bud) return null;
   const currentBud = bud;
   const plants = plantsRes?.ok ? plantsRes.data.items : [];
@@ -104,6 +117,28 @@ export function BudDetailDrawer({ budId, onClose }: { budId: string; onClose: ()
     setMoveTargetId("");
   }
 
+  async function saveBudMeta() {
+    const title = titleDraft.trim();
+    if (!title) {
+      setMetaError("봉우리 제목을 입력해주세요.");
+      return;
+    }
+    setMetaSaving(true);
+    setMetaError("");
+    const result = await patchBud(budId, { title, detail: detailDraft.trim() });
+    setMetaSaving(false);
+    if (!result.ok) {
+      setMetaError(result.error.message);
+      return;
+    }
+    setEditingMeta(false);
+    qc.invalidateQueries({ queryKey: QK.bud(budId) });
+    qc.invalidateQueries({ queryKey: QK.plantBuds(currentBud.plant_id) });
+    qc.invalidateQueries({ queryKey: QK.buds() });
+    qc.invalidateQueries({ queryKey: ["calendar"] });
+    qc.invalidateQueries({ queryKey: QK.briefing() });
+  }
+
   const drawerRight = chatOpen ? chatWidth : 0;
 
   return (
@@ -130,18 +165,64 @@ export function BudDetailDrawer({ budId, onClose }: { budId: string; onClose: ()
         }}
       >
         <header style={{ padding: "16px 18px", borderBottom: "1px solid var(--border)" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginBottom: 10 }}>
             <span className={STATUS_PILL[status]}>
               <span className="pill-dot" style={{ background: "currentColor" }} />
               {STATUS_LABEL[status]}
             </span>
-            <button onClick={onClose} className="btn btn-ghost btn-sm" aria-label="닫기">✕</button>
+            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              {!editingMeta && (
+                <button className="btn btn-secondary btn-sm" onClick={() => setEditingMeta(true)}>수정</button>
+              )}
+              <button onClick={onClose} className="btn btn-ghost btn-sm" aria-label="닫기">✕</button>
+            </div>
           </div>
-          <h3 className="t-h1" style={{ color: "var(--fg)" }}>{currentBud.title}</h3>
-          {currentBud.detail && (
-            <p className="t-body-sm" style={{ color: "var(--fg-muted)", marginTop: 6, lineHeight: 1.6 }}>
-              {currentBud.detail}
-            </p>
+          {editingMeta ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <input
+                className="input"
+                value={titleDraft}
+                onChange={(event) => setTitleDraft(event.target.value)}
+                placeholder="봉우리 제목"
+                autoFocus
+                maxLength={80}
+              />
+              <textarea
+                className="input"
+                value={detailDraft}
+                onChange={(event) => setDetailDraft(event.target.value)}
+                placeholder="세부 설명"
+                rows={3}
+                style={{ resize: "vertical", fontFamily: "var(--font-sans)" }}
+              />
+              {metaError && <div className="t-caption" style={{ color: "var(--danger)" }}>{metaError}</div>}
+              <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                <button
+                  className="btn btn-ghost btn-sm"
+                  disabled={metaSaving}
+                  onClick={() => {
+                    setEditingMeta(false);
+                    setMetaError("");
+                    setTitleDraft(currentBud.title);
+                    setDetailDraft(currentBud.detail ?? "");
+                  }}
+                >
+                  취소
+                </button>
+                <button className="btn btn-primary btn-sm" disabled={metaSaving} onClick={saveBudMeta}>
+                  {metaSaving ? "저장 중…" : "저장"}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <>
+              <h3 className="t-h1" style={{ color: "var(--fg)" }}>{currentBud.title}</h3>
+              {currentBud.detail && (
+                <p className="t-body-sm" style={{ color: "var(--fg-muted)", marginTop: 6, lineHeight: 1.6 }}>
+                  {currentBud.detail}
+                </p>
+              )}
+            </>
           )}
         </header>
 
@@ -183,8 +264,8 @@ export function BudDetailDrawer({ budId, onClose }: { budId: string; onClose: ()
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 20 }}>
             <MetaCell label="유형" value={currentBud.type === "concern" ? "고민" : "일정"} />
             <MetaCell label="마감일" value={currentBud.deadline ?? "없음"} accent={currentBud.deadline ? "warning" : undefined} />
-            <MetaCell label="생성일" value={new Date(currentBud.created_at).toLocaleDateString("ko-KR")} />
-            <MetaCell label="마지막 진행" value={currentBud.last_progress_at ? new Date(currentBud.last_progress_at).toLocaleDateString("ko-KR") : "—"} />
+            <MetaCell label="생성일" value={formatKstDate(currentBud.created_at)} />
+            <MetaCell label="마지막 진행" value={currentBud.last_progress_at ? formatKstDate(currentBud.last_progress_at) : "—"} />
           </div>
 
           {history.length > 0 && (
@@ -201,7 +282,7 @@ export function BudDetailDrawer({ budId, onClose }: { budId: string; onClose: ()
                         {fromS ? STATUS_LABEL[fromS] : "신규"} → <span style={{ color: "var(--fg)", fontWeight: 500 }}>{STATUS_LABEL[toS]}</span>
                       </span>
                       <span style={{ color: "var(--fg-subtle)", marginLeft: "auto" }}>
-                        {new Date(h.at).toLocaleDateString("ko-KR")}
+                        {formatKstDate(h.at)}
                       </span>
                     </li>
                   );

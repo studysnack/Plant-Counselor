@@ -11,6 +11,7 @@ import { useChatStore } from "@/lib/store/chatStore";
 import { useAuthStore } from "@/lib/store/authStore";
 import { STATUS_PILL, STATUS_LABEL, dominantStatus, isActive, BudStatus } from "@/lib/status";
 import { QK } from "@/lib/queryKeys";
+import { formatKstHeaderDate } from "@/lib/time";
 import { StatCardSkeleton, PlantCardSkeleton } from "@/components/ui/Skeleton";
 import { AiChatButton } from "@/components/chat/AiChatButton";
 
@@ -219,7 +220,7 @@ export default function HomePage() {
   }, [allBuds]);
 
   const activeBudCount = allBuds.filter((b) => isActive(b.status)).length;
-  const dateStr = new Date().toLocaleDateString("ko-KR", { month: "long", day: "numeric", weekday: "long" });
+  const dateStr = formatKstHeaderDate(new Date());
 
   // Friendly nudge when the briefing endpoint signals a missing/bad API key —
   // the backend embeds a recognisable Korean fragment in that case.
