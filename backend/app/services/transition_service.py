@@ -2,13 +2,34 @@
 wilting → rot transitions and deadline warning notifications.
 """
 from __future__ import annotations
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from supabase import Client
 
 import app.runtime_settings as rs
 from app.repositories.bud_repo import BudRepository
 from app.repositories.notification_repo import NotificationRepository
+
+
+def _to_dt(value) -> datetime | None:
+    """Parse a timestamp into a timezone-aware datetime (app timezone).
+
+    Robust to mixed formats: ISO strings with or without an offset, "...Z", or a
+    datetime object. Naive values are assumed to be in the app's local timezone.
+    This lets wilting/rot comparisons stay correct even though some rows were
+    written as naive timestamps and newer ones as tz-aware (`+09:00`).
+    """
+    if value is None:
+        return None
+    dt = value if isinstance(value, datetime) else None
+    if dt is None:
+        try:
+            dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=rs.app_timezone())
+    return dt
 
 
 class TransitionService:
@@ -33,14 +54,13 @@ class TransitionService:
         today = rs.today()
 
         if auto_transition:
-            wilting_cutoff = (now - timedelta(days=wilting_days)).isoformat()
+            wilting_cutoff = now - timedelta(days=wilting_days)
             # Keep seed in scans until migration 004 has promoted historical rows.
             active_buds = bud_repo.list(
                 user_id, statuses=["seed", "bud", "flower", "fruit"], limit=200
             )
             for bud in active_buds:
-                last_raw = getattr(bud, "last_progress_at", None) or getattr(bud, "created_at", None)
-                last = last_raw if isinstance(last_raw, str) else (last_raw.isoformat() if last_raw else now.isoformat())
+                last = _to_dt(getattr(bud, "last_progress_at", None) or getattr(bud, "created_at", None)) or now
                 if last <= wilting_cutoff:
                     bud_repo.update(user_id, bud.id, {
                         "status": "wilting",
@@ -49,11 +69,10 @@ class TransitionService:
                     bud_repo.add_history(bud.id, bud.status, "wilting", "자동: 오랜 활동 없음")
                     notif_repo.push(user_id, "bud_wilting", {"bud_id": bud.id, "title": bud.title})
 
-            rot_cutoff = (now - timedelta(days=rot_disappear_days)).isoformat()
+            rot_cutoff = now - timedelta(days=rot_disappear_days)
             wilting_buds = bud_repo.list(user_id, statuses=["wilting"], limit=200)
             for bud in wilting_buds:
-                last_raw = getattr(bud, "last_progress_at", None) or getattr(bud, "created_at", None)
-                last = last_raw if isinstance(last_raw, str) else (last_raw.isoformat() if last_raw else now.isoformat())
+                last = _to_dt(getattr(bud, "last_progress_at", None) or getattr(bud, "created_at", None)) or now
                 if last <= rot_cutoff:
                     bud_repo.update(user_id, bud.id, {
                         "status": "rot",
@@ -67,7 +86,7 @@ class TransitionService:
             # passed since that Nth bud started wilting (each bud's wilt time is
             # recorded in last_progress_at when it transitions to "wilting").
             if plant_wilt_threshold > 0:
-                plant_wilt_cutoff = (now - timedelta(days=plant_wilt_days)).isoformat()
+                plant_wilt_cutoff = now - timedelta(days=plant_wilt_days)
                 plants_res = (
                     db.table("plants")
                     .select("id,name,status")
@@ -83,11 +102,7 @@ class TransitionService:
                     if len(p_wilting) < plant_wilt_threshold:
                         continue
                     wilt_times = sorted(
-                        (
-                            (getattr(b, "last_progress_at", None) or getattr(b, "created_at", None) or now.isoformat())
-                            if isinstance(getattr(b, "last_progress_at", None) or getattr(b, "created_at", None), str)
-                            else now.isoformat()
-                        )
+                        _to_dt(getattr(b, "last_progress_at", None) or getattr(b, "created_at", None)) or now
                         for b in p_wilting
                     )
                     threshold_reached_at = wilt_times[plant_wilt_threshold - 1]
