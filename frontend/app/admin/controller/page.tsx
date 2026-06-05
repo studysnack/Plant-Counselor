@@ -9,6 +9,7 @@ import {
   type RuntimeSetting, type SqlResult,
 } from "@/lib/api/admin";
 import { useAuthStore } from "@/lib/store/authStore";
+import { formatKstTimestamp } from "@/lib/time";
 
 // ── Shared Styles ─────────────────────────────────────────────────────────────
 
@@ -231,28 +232,10 @@ function SqlExecutor() {
 
 // ── Time Travel ───────────────────────────────────────────────────────────────
 
-const SEOUL_TIME_ZONE = "Asia/Seoul";
-
-function fmtSeoul(d: Date): string {
-  const parts = new Intl.DateTimeFormat("ko-KR", {
-    timeZone: SEOUL_TIME_ZONE,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hourCycle: "h23",
-  }).formatToParts(d);
-  const get = (type: Intl.DateTimeFormatPartTypes) =>
-    parts.find((part) => part.type === type)?.value ?? "00";
-  return `${get("year")}-${get("month")}-${get("day")} ${get("hour")}:${get("minute")}:${get("second")}`;
-}
-
 function Clock({
   label, date, accent, sub,
 }: { label: string; date: Date | null; accent?: boolean; sub?: string }) {
-  const timeStr = date ? fmtSeoul(date) : "---- -- -- --:--:--";
+  const timeStr = date ? formatKstTimestamp(date) : "---- -- -- --:--:--";
   const [datePart, timePart] = timeStr.split(" ");
   return (
     <div style={{
@@ -348,12 +331,12 @@ function TimeTravelSection() {
         });
         // Auto-run transition scan with the new virtual time
         const scanRes = await triggerScheduler();
-        const scanTime = fmtSeoul(new Date());
+        const scanTime = formatKstTimestamp(new Date());
         setScanLog({
           time: scanTime,
           ok: scanRes.ok,
           msg: scanRes.ok
-            ? `전환 스캔 완료 (${fmtSeoul(new Date(Date.parse(res.data.virtual_now))).slice(0, 10)} 기준)`
+            ? `전환 스캔 완료 (${formatKstTimestamp(new Date(Date.parse(res.data.virtual_now))).slice(0, 10)} 기준)`
             : "스캔 실패",
         });
       }

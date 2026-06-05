@@ -1,9 +1,10 @@
 from __future__ import annotations
-from datetime import datetime
 from types import SimpleNamespace
 
 from supabase import Client
 from ulid import ULID
+
+from app import runtime_settings as rs
 
 
 def _row(d: dict | None) -> SimpleNamespace | None:
@@ -64,7 +65,7 @@ class NotificationRepository:
     def ack(self, user_id: str, notification_id: str) -> bool:
         res = (
             self.db.table("notifications")
-            .update({"acked_at": datetime.utcnow().isoformat()})
+            .update({"acked_at": rs.now().isoformat()})
             .eq("id", notification_id)
             .eq("user_id", user_id)
             .execute()
@@ -75,7 +76,7 @@ class NotificationRepository:
         """Mark every unread notification for this user as read. Returns count."""
         res = (
             self.db.table("notifications")
-            .update({"acked_at": datetime.utcnow().isoformat()})
+            .update({"acked_at": rs.now().isoformat()})
             .eq("user_id", user_id)
             .is_("acked_at", "null")
             .execute()

@@ -9,6 +9,7 @@ import {
   Notification,
 } from "@/lib/api/notifications";
 import { QK } from "@/lib/queryKeys";
+import { formatKstDateTime, formatRelativeKst } from "@/lib/time";
 
 // ── kind metadata ───────────────────────────────────────────
 
@@ -45,19 +46,11 @@ function notifBody(n: Notification): string {
 }
 
 function timeAgo(iso: string): string {
-  const t = new Date(iso).getTime();
-  const diff = (Date.now() - t) / 1000;
-  if (diff < 60) return "방금";
-  if (diff < 3600) return `${Math.floor(diff / 60)}분 전`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)}시간 전`;
-  return new Date(iso).toLocaleDateString("ko-KR");
+  return formatRelativeKst(iso);
 }
 
 function fullTime(iso: string): string {
-  return new Date(iso).toLocaleString("ko-KR", {
-    year: "numeric", month: "long", day: "numeric",
-    hour: "2-digit", minute: "2-digit",
-  });
+  return formatKstDateTime(iso);
 }
 
 // ── notification row (expandable) ────────────────────────────

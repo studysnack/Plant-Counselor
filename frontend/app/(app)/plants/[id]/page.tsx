@@ -3,14 +3,15 @@
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState, useEffect, useRef } from "react";
-import { getPlant, listPlants, deletePlant, Plant } from "@/lib/api/plants";
-import { listBuds, getBud, setBudProgress, deleteBud, moveBud, Bud } from "@/lib/api/buds";
+import { getPlant, listPlants, updatePlant, deletePlant, Plant } from "@/lib/api/plants";
+import { listBuds, getBud, patchBud, setBudProgress, deleteBud, moveBud, Bud } from "@/lib/api/buds";
 import { useChatStore } from "@/lib/store/chatStore";
 import { useAuthStore } from "@/lib/store/authStore";
 import {
   STATUS_LABEL, STATUS_PILL, STATUS_COLOR_VAR, normalizeBudStatus, isActive, isDone,
 } from "@/lib/status";
 import { QK } from "@/lib/queryKeys";
+import { formatKstDate } from "@/lib/time";
 import type { ApiResult } from "@/lib/api/client";
 import { Skeleton, BudRowSkeleton } from "@/components/ui/Skeleton";
 
@@ -43,6 +44,9 @@ function BudRow({ bud, selected, onClick }: { bud: Bud; selected: boolean; onCli
           }}
         >
           {bud.title}
+        </div>
+        <div className="t-caption" style={{ color: "var(--fg-subtle)", marginTop: 2 }}>
+          클릭해서 상세 확인 및 수정
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6 }}>
           <div style={{ flex: 1, height: 3, background: "var(--bg-muted)", borderRadius: 999, overflow: "hidden", maxWidth: 200 }}>
@@ -83,19 +87,32 @@ function BudDetailDrawer({ budId, onClose }: { budId: string; onClose: () => voi
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const bud = data?.ok ? data.data.bud : null;
   const history = data?.ok ? data.data.history : [];
-  if (!bud) return null;
-  const plants = plantsRes?.ok ? plantsRes.data.items : [];
-  const movablePlants = plants.filter((plant) => plant.id !== bud.plant_id && plant.status !== "archived");
+  const [editingMeta, setEditingMeta] = useState(false);
+  const [titleDraft, setTitleDraft] = useState("");
+  const [detailDraft, setDetailDraft] = useState("");
+  const [metaSaving, setMetaSaving] = useState(false);
+  const [metaError, setMetaError] = useState("");
 
-  const status = normalizeBudStatus(bud.status);
-  const editable = !isDone(bud.status);
-  const canHarvest = bud.progress >= 100;
-  const shown = draft ?? bud.progress;
+  useEffect(() => {
+    if (!bud || editingMeta) return;
+    setTitleDraft(bud.title);
+    setDetailDraft(bud.detail ?? "");
+  }, [bud, editingMeta]);
+
+  if (!bud) return null;
+  const currentBud = bud;
+  const plants = plantsRes?.ok ? plantsRes.data.items : [];
+  const movablePlants = plants.filter((plant) => plant.id !== currentBud.plant_id && plant.status !== "archived");
+
+  const status = normalizeBudStatus(currentBud.status);
+  const editable = !isDone(currentBud.status);
+  const canHarvest = currentBud.progress >= 100;
+  const shown = draft ?? currentBud.progress;
 
   // Quick actions hand off to chat with a self-contained instruction so the
   // LLM uses the correct skill without further clarification.
   function quick(prompt: string) {
-    openWith({ kind: "bud", id: bud!.id });
+    openWith({ kind: "bud", id: currentBud.id });
     setTimeout(() => {
       const ev = new CustomEvent("pc-chat-prompt", { detail: prompt });
       window.dispatchEvent(ev);
@@ -112,13 +129,13 @@ function BudDetailDrawer({ budId, onClose }: { budId: string; onClose: () => voi
     setDraft(null);
     if (!r.ok) return;
     qc.invalidateQueries({ queryKey: QK.bud(budId) });
-    qc.invalidateQueries({ queryKey: QK.plantBuds(bud!.plant_id) });
+    qc.invalidateQueries({ queryKey: QK.plantBuds(currentBud.plant_id) });
     qc.invalidateQueries({ queryKey: ["buds"] });
     qc.invalidateQueries({ queryKey: ["stats"] });
     qc.invalidateQueries({ queryKey: ["briefing"] });
     if (sendToAI && note) {
       const prompt =
-        `방금 '${bud!.title}' 봉우리의 진행률을 직접 ${value}%로 변경했어요.\n` +
+        `방금 '${currentBud.title}' 봉우리의 진행률을 직접 ${value}%로 변경했어요.\n` +
         `이유: ${note}\n\n` +
         `진행률은 이미 변경됐으니 다시 바꾸지 말고, 이 변화에 대해 짧게 조언하거나 ` +
         `다음에 무엇을 하면 좋을지 알려줘.`;
@@ -132,7 +149,7 @@ function BudDetailDrawer({ budId, onClose }: { budId: string; onClose: () => voi
     setDeleting(false);
     if (!result.ok) return;
     qc.removeQueries({ queryKey: QK.bud(budId) });
-    qc.invalidateQueries({ queryKey: QK.plantBuds(bud!.plant_id) });
+    qc.invalidateQueries({ queryKey: QK.plantBuds(currentBud.plant_id) });
     qc.invalidateQueries({ queryKey: ["buds"] });
     qc.invalidateQueries({ queryKey: ["stats"] });
     qc.invalidateQueries({ queryKey: ["briefing"] });
@@ -141,10 +158,10 @@ function BudDetailDrawer({ budId, onClose }: { budId: string; onClose: () => voi
   }
 
   async function moveToPlant() {
-    if (!moveTargetId || moveTargetId === bud!.plant_id) return;
+    if (!moveTargetId || moveTargetId === currentBud.plant_id) return;
     setMoving(true);
     setMoveError("");
-    const previousPlantId = bud!.plant_id;
+    const previousPlantId = currentBud.plant_id;
     const result = await moveBud(budId, moveTargetId);
     setMoving(false);
     if (!result.ok) {
@@ -160,6 +177,28 @@ function BudDetailDrawer({ budId, onClose }: { budId: string; onClose: () => voi
     qc.invalidateQueries({ queryKey: ["briefing"] });
     qc.invalidateQueries({ queryKey: ["calendar"] });
     setMoveTargetId("");
+  }
+
+  async function saveBudMeta() {
+    const title = titleDraft.trim();
+    if (!title) {
+      setMetaError("봉우리 제목을 입력해주세요.");
+      return;
+    }
+    setMetaSaving(true);
+    setMetaError("");
+    const result = await patchBud(budId, { title, detail: detailDraft.trim() });
+    setMetaSaving(false);
+    if (!result.ok) {
+      setMetaError(result.error.message);
+      return;
+    }
+    setEditingMeta(false);
+    qc.invalidateQueries({ queryKey: QK.bud(budId) });
+    qc.invalidateQueries({ queryKey: QK.plantBuds(currentBud.plant_id) });
+    qc.invalidateQueries({ queryKey: QK.buds() });
+    qc.invalidateQueries({ queryKey: ["calendar"] });
+    qc.invalidateQueries({ queryKey: QK.briefing() });
   }
 
   // When the chat panel is open the drawer shifts left to sit beside it.
@@ -190,18 +229,64 @@ function BudDetailDrawer({ budId, onClose }: { budId: string; onClose: () => voi
         }}
       >
         <header style={{ padding: "16px 18px", borderBottom: "1px solid var(--border)" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginBottom: 10 }}>
             <span className={STATUS_PILL[status]}>
               <span className="pill-dot" style={{ background: "currentColor" }} />
               {STATUS_LABEL[status]}
             </span>
-            <button onClick={onClose} className="btn btn-ghost btn-sm" aria-label="닫기">✕</button>
+            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              {!editingMeta && (
+                <button className="btn btn-secondary btn-sm" onClick={() => setEditingMeta(true)}>수정</button>
+              )}
+              <button onClick={onClose} className="btn btn-ghost btn-sm" aria-label="닫기">✕</button>
+            </div>
           </div>
-          <h3 className="t-h1" style={{ color: "var(--fg)" }}>{bud.title}</h3>
-          {bud.detail && (
-            <p className="t-body-sm" style={{ color: "var(--fg-muted)", marginTop: 6, lineHeight: 1.6 }}>
-              {bud.detail}
-            </p>
+          {editingMeta ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <input
+                className="input"
+                value={titleDraft}
+                onChange={(event) => setTitleDraft(event.target.value)}
+                placeholder="봉우리 제목"
+                autoFocus
+                maxLength={80}
+              />
+              <textarea
+                className="input"
+                value={detailDraft}
+                onChange={(event) => setDetailDraft(event.target.value)}
+                placeholder="세부 설명"
+                rows={3}
+                style={{ resize: "vertical", fontFamily: "var(--font-sans)" }}
+              />
+              {metaError && <div className="t-caption" style={{ color: "var(--danger)" }}>{metaError}</div>}
+              <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                <button
+                  className="btn btn-ghost btn-sm"
+                  disabled={metaSaving}
+                  onClick={() => {
+                    setEditingMeta(false);
+                    setMetaError("");
+                    setTitleDraft(bud.title);
+                    setDetailDraft(bud.detail ?? "");
+                  }}
+                >
+                  취소
+                </button>
+                <button className="btn btn-primary btn-sm" disabled={metaSaving} onClick={saveBudMeta}>
+                  {metaSaving ? "저장 중…" : "저장"}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <>
+              <h3 className="t-h1" style={{ color: "var(--fg)" }}>{bud.title}</h3>
+              {bud.detail && (
+                <p className="t-body-sm" style={{ color: "var(--fg-muted)", marginTop: 6, lineHeight: 1.6 }}>
+                  {bud.detail}
+                </p>
+              )}
+            </>
           )}
         </header>
 
@@ -243,8 +328,8 @@ function BudDetailDrawer({ budId, onClose }: { budId: string; onClose: () => voi
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 20 }}>
             <MetaCell label="유형" value={bud.type === "concern" ? "고민" : "일정"} />
             <MetaCell label="마감일" value={bud.deadline ?? "없음"} accent={bud.deadline ? "warning" : undefined} />
-            <MetaCell label="생성일" value={new Date(bud.created_at).toLocaleDateString("ko-KR")} />
-            <MetaCell label="마지막 진행" value={bud.last_progress_at ? new Date(bud.last_progress_at).toLocaleDateString("ko-KR") : "—"} />
+            <MetaCell label="생성일" value={formatKstDate(bud.created_at)} />
+            <MetaCell label="마지막 진행" value={bud.last_progress_at ? formatKstDate(bud.last_progress_at) : "—"} />
           </div>
 
           {history.length > 0 && (
@@ -267,7 +352,7 @@ function BudDetailDrawer({ budId, onClose }: { budId: string; onClose: () => voi
                         {fromS ? STATUS_LABEL[fromS] : "신규"} → <span style={{ color: "var(--fg)", fontWeight: 500 }}>{STATUS_LABEL[toS]}</span>
                       </span>
                       <span style={{ color: "var(--fg-subtle)", marginLeft: "auto" }}>
-                        {new Date(h.at).toLocaleDateString("ko-KR")}
+                        {formatKstDate(h.at)}
                       </span>
                     </li>
                   );
@@ -459,6 +544,11 @@ export default function PlantDetailPage() {
   const [selectedBudId, setSelectedBudId] = useState<string | null>(() => searchParams.get("bud"));
   const [filter, setFilter] = useState<Filter>("all");
   const [confirming, setConfirming] = useState(false);
+  const [editingPlant, setEditingPlant] = useState(false);
+  const [plantNameDraft, setPlantNameDraft] = useState("");
+  const [plantDescriptionDraft, setPlantDescriptionDraft] = useState("");
+  const [plantSaveError, setPlantSaveError] = useState("");
+  const [plantSaving, setPlantSaving] = useState(false);
 
   const { data: plantRes, isLoading: loadingPlant } = useQuery({
     queryKey: QK.plant(id),
@@ -483,6 +573,13 @@ export default function PlantDetailPage() {
 
   const plant = plantRes?.ok ? plantRes.data : null;
   const allBuds = budsRes?.ok ? budsRes.data.items : [];
+
+  useEffect(() => {
+    if (!plant || editingPlant) return;
+    setPlantNameDraft(plant.name);
+    setPlantDescriptionDraft(plant.description ?? "");
+  }, [plant, editingPlant]);
+
   // The plants table never maintains active_bud_count/harvested_count/rot_count
   // (they're write-never columns), so derive the header stats live from the buds.
   const headerStats = {
@@ -507,6 +604,32 @@ export default function PlantDetailPage() {
     qc.invalidateQueries({ queryKey: ["stats"] });
     qc.invalidateQueries({ queryKey: ["briefing"] });
     router.replace("/plants");
+  }
+
+  async function savePlantMeta() {
+    if (!plant) return;
+    const name = plantNameDraft.trim();
+    if (!name) {
+      setPlantSaveError("식물 이름을 입력해주세요.");
+      return;
+    }
+    setPlantSaving(true);
+    setPlantSaveError("");
+    const result = await updatePlant(plant.id, {
+      name,
+      description: plantDescriptionDraft.trim(),
+    });
+    setPlantSaving(false);
+    if (!result.ok) {
+      setPlantSaveError(result.error.message);
+      return;
+    }
+    setEditingPlant(false);
+    qc.invalidateQueries({ queryKey: QK.plant(plant.id) });
+    qc.invalidateQueries({ queryKey: QK.plants() });
+    qc.invalidateQueries({ queryKey: QK.buds() });
+    qc.invalidateQueries({ queryKey: QK.briefing() });
+    qc.invalidateQueries({ queryKey: ["calendar"] });
   }
 
   return (
@@ -536,11 +659,53 @@ export default function PlantDetailPage() {
           <header className="card animate-in" style={{ padding: "22px 24px", marginBottom: 24 }}>
             <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
               <div style={{ flex: 1, minWidth: 0 }}>
-                <h1 className="t-display" style={{ color: "var(--fg)" }}>{plant.name}</h1>
-                {plant.description && (
-                  <p className="t-body-sm" style={{ color: "var(--fg-muted)", marginTop: 6, maxWidth: 560 }}>
-                    {plant.description}
-                  </p>
+                {editingPlant ? (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8, maxWidth: 620 }}>
+                    <input
+                      className="input"
+                      value={plantNameDraft}
+                      onChange={(event) => setPlantNameDraft(event.target.value)}
+                      placeholder="식물 이름"
+                      autoFocus
+                      maxLength={60}
+                      style={{ fontSize: 22, fontWeight: 700 }}
+                    />
+                    <textarea
+                      className="input"
+                      value={plantDescriptionDraft}
+                      onChange={(event) => setPlantDescriptionDraft(event.target.value)}
+                      placeholder="식물 설명"
+                      rows={3}
+                      style={{ resize: "vertical", fontFamily: "var(--font-sans)" }}
+                    />
+                    {plantSaveError && <div className="t-caption" style={{ color: "var(--danger)" }}>{plantSaveError}</div>}
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                      <button className="btn btn-primary btn-sm" disabled={plantSaving} onClick={savePlantMeta}>
+                        {plantSaving ? "저장 중…" : "저장"}
+                      </button>
+                      <button
+                        className="btn btn-ghost btn-sm"
+                        disabled={plantSaving}
+                        onClick={() => {
+                          setEditingPlant(false);
+                          setPlantSaveError("");
+                          setPlantNameDraft(plant.name);
+                          setPlantDescriptionDraft(plant.description ?? "");
+                        }}
+                      >
+                        취소
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <h1 className="t-display" style={{ color: "var(--fg)" }}>{plant.name}</h1>
+                    {plant.description && (
+                      <p className="t-body-sm" style={{ color: "var(--fg-muted)", marginTop: 6, maxWidth: 560 }}>
+                        {plant.description}
+                      </p>
+                    )}
+                  </>
                 )}
                 <div style={{ display: "flex", gap: 20, marginTop: 14, flexWrap: "wrap" }}>
                   <BigStat label="활성" value={headerStats.active} />
@@ -550,11 +715,14 @@ export default function PlantDetailPage() {
               </div>
               <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end" }}>
                 <span className="t-caption" style={{ color: "var(--fg-muted)" }}>
-                  {new Date(plant.created_at).toLocaleDateString("ko-KR")} 시작
+                  {formatKstDate(plant.created_at)} 시작
                 </span>
                 <button className="btn btn-secondary btn-sm" onClick={() => openWith({ kind: "plant", id: plant.id })}>
                   이 식물 상담
                 </button>
+                {!editingPlant && (
+                  <button className="btn btn-secondary btn-sm" onClick={() => setEditingPlant(true)}>정보 수정</button>
+                )}
                 {!confirming ? (
                   <button className="btn btn-ghost btn-sm" onClick={() => setConfirming(true)}>
                     식물 삭제
