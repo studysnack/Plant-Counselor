@@ -15,7 +15,7 @@ _BACKOFF_BASE = 1.0         # seconds: 1s, 2s between attempts
 class LLMClient:
     """Gemini API 기반 LLM 클라이언트."""
 
-    DEFAULT_MODEL = "gemini-2.5-flash"
+    DEFAULT_MODEL = "gemini-3-flash-preview"
 
     def __init__(self, api_key: str, model: str = DEFAULT_MODEL):
         self._key = api_key

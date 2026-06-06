@@ -14,8 +14,8 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "pydantic>=2.0.0",
     "pydantic-settings>=2.0.0",
-    # LLM (Google Gemini 2.5 Flash)
-    "google-genai>=1.0.0",
+    # LLM (Google Gemini) — 2.6+ handles the new "AQ."-prefixed API key format
+    "google-genai>=2.6.0",
     # Scheduling (wilting/rot auto-transition)
     "apscheduler>=3.10.0",
     # Utilities
