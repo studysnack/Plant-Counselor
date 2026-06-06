@@ -127,7 +127,7 @@
 | 프론트엔드 | Next.js 16 (App Router), React 19, TypeScript, Tailwind v4, Zustand, TanStack Query v5 |
 | 백엔드   | FastAPI, **supabase-py** (PostgREST HTTP — SQLAlchemy/psycopg2 미사용), Pydantic v2, APScheduler |
 | DB    | **Supabase PostgreSQL** + Row Level Security (supabase-py HTTP 접근)                              |
-| LLM   | Google Gemini 2.5 Flash (`google-genai` SDK, 기본 `gemini-2.5-flash`)                            |
+| LLM   | Google Gemini (`google-genai` SDK; 코드 기본 모델 `gemini-3-flash-preview`, `profiles.ai_model` 기본값 `gemini-2.5-flash`) |
 | 인증    | Supabase Auth (Google OAuth) + **ES256 JWKS** 검증 (HS256 fallback) + Fernet API 키 암호화          |
 | ID    | ULID (python-ulid)                                                                              |
 | 스프라이트 | Python Pillow — 자동 생성·crop·좌표 매핑                                                               |
@@ -161,7 +161,7 @@ plant-counselor/
 │   │   ├── config.py              ─ 환경설정 (.env, pydantic-settings)
 │   │   ├── deps.py                ─ get_db + require_user/require_admin (JWKS)
 │   │   └── main.py                ─ FastAPI 앱 진입점 (CORS 멀티 오리진)
-│   ├── migrations/                ─ Supabase 적용 SQL (001~004)
+│   ├── migrations/                ─ Supabase 적용 SQL (001~006)
 │   ├── logs/chat/                 ─ 채팅 디버그 로그 (JSON)
 │   └── run.py                     ─ uvicorn 실행
 ├── frontend/

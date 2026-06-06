@@ -50,6 +50,8 @@ npm run dev                         # Next.js 16
   - `002_ai_logs.sql` — AI 채팅 로그 영구 저장 테이블(`ai_logs`)
   - `003_calendar_event_color.sql` — 일정 색상 컬럼
   - `004_remove_seed_bud_status.sql` — `seed` 상태 제거, 봉우리 기본값 `bud`
+  - `005_calendar_event_time.sql` — 독립 일정 시간(`event_time`)·종일(`all_day`) 컬럼
+  - `006_calendar_event_end_repeat.sql` — 독립 일정 종료일시(`end_date`/`end_time`)·반복(`repeat_rule`) 컬럼
 
 ## 4. 로그
 

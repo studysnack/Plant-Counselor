@@ -74,7 +74,7 @@
 - [x] 월별 그리드 + 이벤트 도트(최대 3개) + 클릭 시 목록 펼침
 - [x] 이벤트 카드: 제목 + 식물명 badge + detail(시간) + 타입(일정/고민)
 - [x] 우측 상단 공통 "AI 대화" 버튼 → 전역 채팅 (캘린더 화면이면 calendar 스코프 컨텍스트)
-- [x] "+ 일정 추가" 모달 → calendar_events 직접 생성
+- [x] "+ 일정 추가" 모달 → calendar_events 직접 생성 (단순 날짜뿐 아니라 시작·종료 시간/하루 종일(all_day)/다일 종료일(end_date·end_time)/반복(repeat_rule: none·daily·weekly·monthly·yearly) 지원 — migration 005·006)
 - [x] AI가 일정 자동 분류: "밥먹기" → 일상, "면접" → 취업 (질문 없이)
 - [x] "오늘", "내일" → 자동 날짜 변환
 - [x] 오늘 일정 패널 (우측)
@@ -170,7 +170,7 @@ plant-counselor/
 │   │   ├── deps.py                   # Supabase JWT 검증, require_user/require_admin
 │   │   └── main.py                   # CORS 다중 오리진 래퍼 + 라우터 등록
 │   │
-│   ├── migrations/                   # 001_calendar_events ~ 004_remove_seed_bud_status
+│   ├── migrations/                   # 001_calendar_events ~ 006_calendar_event_end_repeat
 │   ├── pyproject.toml
 │   ├── requirements.txt
 │   ├── .env.example

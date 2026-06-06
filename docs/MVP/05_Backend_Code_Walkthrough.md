@@ -629,7 +629,7 @@ def setup_scheduler():
 
 ```python
 DEFAULTS = {
-    "llm_default_model": "gemini-2.5-flash", "llm_max_steps": 10, "llm_temperature": None,
+    "llm_default_model": "gemini-3-flash-preview", "llm_max_steps": 10, "llm_temperature": None,
     "scheduler_interval_minutes": 10,
     "default_wilting_days": 7, "default_rot_disappear_days": 14,
     "default_deadline_warn_days": 3, "default_auto_transition": True,
@@ -680,6 +680,8 @@ Supabase에 적용하는 SQL 마이그레이션:
 - `002_ai_logs.sql` — AI 로그 영구 저장 테이블.
 - `003_calendar_event_color.sql` — 일정 색상 컬럼.
 - `004_remove_seed_bud_status.sql` — `seed` 상태 제거(과거 행 → `bud` 승격).
+- `005_calendar_event_time.sql` — 독립 일정에 시간(`event_time`)·종일(`all_day`) 추가.
+- `006_calendar_event_end_repeat.sql` — 독립 일정에 종료일시(`end_date`/`end_time`, 다일)·반복 규칙(`repeat_rule`: none/daily/weekly/monthly/yearly) 추가.
 
 > Alembic은 사용하지 않습니다. 스키마 변경은 Supabase 마이그레이션 SQL 또는 컨트롤러 SQL 실행기로 적용합니다.
 
