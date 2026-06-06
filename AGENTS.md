@@ -126,7 +126,7 @@ bud -> flower -> fruit -> harvested
 | Database | Supabase PostgreSQL |
 | Authentication | Supabase Auth Google OAuth, ES256 JWKS 검증, HS256 fallback |
 | LLM | Google Gemini via `google-genai` |
-| User API key encryption | Fernet, `KEY_ENCRYPTION_SECRET` SHA-256 파생 키 |
+| LLM API key | 서버 환경변수 `LLM_API_KEY` |
 | IDs | ULID |
 
 ### 중요한 결정
@@ -176,6 +176,8 @@ Plant-Counselor/
 │   ├── migrations/002_ai_logs.sql
 │   ├── migrations/003_calendar_event_color.sql
 │   ├── migrations/004_remove_seed_bud_status.sql
+│   ├── migrations/005_calendar_event_time.sql
+│   ├── migrations/006_calendar_event_end_repeat.sql
 │   ├── requirements.txt
 │   ├── poetry.lock
 │   ├── pyproject.toml
@@ -299,7 +301,7 @@ CORS 메서드는 `GET`, `POST`, `PATCH`, `PUT`, `DELETE`, 헤더는 `Authorizat
 ```text
 POST /api/v1/chat/message
   -> require_user
-  -> 사용자별 API 키 또는 서버 fallback 키 선택
+  -> 서버 환경변수 LLM_API_KEY 선택
   -> 사용자별 모델 override 또는 runtime 기본 모델 선택
   -> ChatOrchestrator.run()
   -> PromptBuilder.build_system()
@@ -546,11 +548,19 @@ Supabase 세션은 localStorage 기반이므로 `proxy.ts`에서 쿠키를 검�
 | 종류 | 저장 위치 | 특징 |
 | --- | --- | --- |
 | 식물 일정 | `buds.deadline` | 진행률과 생애주기 있음 |
-| 일반 일정 | `calendar_events` | 진행률 없음, 단순 약속과 예약 |
+| 일반 일정 | `calendar_events` | 진행률 없음, 단순 약속과 예약. 날짜, 선택 시간, 하루 종일 여부 저장 |
 
 일반 일정은 `color`에 `olive`, `blue`, `yellow`, `red`, `pink`, `purple` 중 하나를
 저장한다. 기본값은 기존 강조색과 같은 `olive`다. 프론트 일정 modal과 AI 일정 스킬은
 같은 팔레트 ID를 사용하며 임의 CSS 색상 문자열은 저장하지 않는다.
+
+일반 일정은 `event_date date`, `event_time time`, `end_date date`, `end_time time`,
+`all_day boolean`, `repeat_rule text`로 시간 정보를 표현한다. `event_date`는 시작
+날짜다. `all_day=true`이면 시작/종료 시간은 `NULL`이어야 하고, `all_day=false`이면
+시작/종료 시간이 모두 필요하다. 반복 규칙은 `none`, `daily`, `weekly`, `monthly`,
+`yearly` 중 하나다. 기존 date-only 일정은 migration 005에서 하루 종일 일정으로 유지했고,
+migration 006에서 종료 날짜와 반복 규칙을 추가했다. 프론트 일정 modal은 Apple Calendar처럼
+하루 종일 토글을 켜면 시간 입력을 숨기고, 시작/종료 날짜와 반복 선택을 함께 저장한다.
 
 `GET /api/v1/calendar?from=YYYY-MM-DD&to=YYYY-MM-DD`는 두 종류를 병합하고
 `source: "bud" | "event"`로 구분한다.
@@ -825,6 +835,8 @@ backend/app/services/calendar_service.py
 backend/app/repositories/calendar_event_repo.py
 backend/migrations/001_calendar_events.sql
 backend/migrations/003_calendar_event_color.sql
+backend/migrations/005_calendar_event_time.sql
+backend/migrations/006_calendar_event_end_repeat.sql
 frontend/lib/api/stats.ts
 frontend/app/(app)/calendar/page.tsx
 ```

@@ -36,7 +36,6 @@ from app.services.calendar_service import CalendarService
 from app.services.conversation_service import ConversationService
 from app.services.garden_state_service import GardenStateService
 from app.services.plant_service import PlantService
-from app.services.user_service import UserService
 
 router = APIRouter(tags=["chat"])
 
@@ -61,11 +60,7 @@ _PROMPT_BUILDER = PromptBuilder()
 
 
 def _resolve_api_key(db: Client, user) -> str:
-    try:
-        key = UserService(db).get_api_key(user.id)
-    except Exception:
-        key = None
-    return key or settings.llm_api_key
+    return settings.llm_api_key
 
 
 @router.post("/chat/message")

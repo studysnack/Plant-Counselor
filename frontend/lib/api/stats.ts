@@ -17,6 +17,13 @@ export interface CalEvent {
   detail: string;
   plant_name: string;
   plant_id: string | null;
+  date?: string;
+  end_date?: string;
+  time?: string | null;
+  end_time?: string | null;
+  all_day?: boolean;
+  repeat_rule?: CalendarEventRepeatRule;
+  occurrence_date?: string;
   color?: CalendarEventColor;
   /** "bud" = derived from a bud deadline · "event" = standalone calendar event */
   source: "bud" | "event";
@@ -38,15 +45,26 @@ export interface CalendarEvent {
   title: string;
   detail: string;
   date: string;
+  end_date: string;
+  time: string | null;
+  end_time: string | null;
+  all_day: boolean;
+  repeat_rule: CalendarEventRepeatRule;
   plant_id: string | null;
   color: CalendarEventColor;
 }
 
 export type CalendarEventColor = "olive" | "blue" | "yellow" | "red" | "pink" | "purple";
+export type CalendarEventRepeatRule = "none" | "daily" | "weekly" | "monthly" | "yearly";
 
 export const createCalendarEvent = (body: {
   title: string;
   date: string;
+  end_date?: string;
+  time?: string | null;
+  end_time?: string | null;
+  all_day?: boolean;
+  repeat_rule?: CalendarEventRepeatRule;
   plant_id?: string | null;
   detail?: string;
   color?: CalendarEventColor;
@@ -54,7 +72,18 @@ export const createCalendarEvent = (body: {
 
 export const updateCalendarEvent = (
   id: string,
-  body: { title?: string; date?: string; plant_id?: string | null; detail?: string; color?: CalendarEventColor }
+  body: {
+    title?: string;
+    date?: string;
+    end_date?: string;
+    time?: string | null;
+    end_time?: string | null;
+    all_day?: boolean;
+    repeat_rule?: CalendarEventRepeatRule;
+    plant_id?: string | null;
+    detail?: string;
+    color?: CalendarEventColor;
+  }
 ) => apiPatch<CalendarEvent>(`/calendar/events/${id}`, body);
 
 export const deleteCalendarEvent = (id: string) =>

@@ -222,9 +222,8 @@ export default function HomePage() {
   const activeBudCount = allBuds.filter((b) => isActive(b.status)).length;
   const dateStr = formatKstHeaderDate(new Date());
 
-  // Friendly nudge when the briefing endpoint signals a missing/bad API key —
-  // the backend embeds a recognisable Korean fragment in that case.
-  const apiKeyMissing = briefing.includes("API 키") && briefing.includes("설정");
+  // Friendly nudge when the briefing endpoint signals a missing/bad server API key.
+  const apiKeyMissing = briefing.includes("API 키");
 
   return (
     <div className="app-page app-page-wide">
@@ -256,13 +255,12 @@ export default function HomePage() {
           <span className="dot" style={{ background: "var(--warning)" }} />
           <div style={{ flex: 1 }}>
             <div className="t-body-sm" style={{ color: "var(--fg)", fontWeight: 500 }}>
-              AI를 사용하려면 Gemini API 키가 필요해요
+              AI를 사용하려면 서버 Gemini API 키가 필요해요
             </div>
             <div className="t-caption" style={{ color: "var(--fg-muted)" }}>
-              설정 → AI 에서 키를 입력하면 AI 정원사와 대화할 수 있습니다.
+              서버 환경변수 LLM_API_KEY 설정을 확인해야 합니다.
             </div>
           </div>
-          <button className="btn btn-primary btn-sm" onClick={() => router.push("/settings")}>설정 열기</button>
         </div>
       )}
 

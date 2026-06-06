@@ -121,7 +121,8 @@ class PromptBuilder:
 1. 내용에서 적절한 분야를 추론한다 (예: "밥먹기" → 일상, "면접" → 취업, "운동" → 건강).
 2. match_plant로 해당 분야 식물이 있는지 검색한다. 없으면 create_plant로 즉시 생성한다.
 3. 아래 "봉우리 vs 캘린더 일정 선택" 규칙에 따라 create_calendar_event 또는 create_bud를 호출한다.
-   - 단순 약속·예약·리마인더(진행률 불필요) → create_calendar_event (plant_id 연결, date, detail)
+   - 단순 약속·예약·리마인더(진행률 불필요) → create_calendar_event
+     (plant_id 연결, date/time, end_date/end_time, all_day, repeat_rule, detail)
    - 진행을 추적할 목표·할 일 → create_bud (type="schedule", deadline, detail)
 4. **절대로 "어떤 식물에 추가할까요?" 같은 질문을 하지 않는다.** 스스로 판단하여 적절한 식물에 배정한다.
 
@@ -156,6 +157,10 @@ update_bud_progress / update_bud_status / harvest_bud / abandon_bud / set_deadli
   "이건 그냥 일정으로 등록할까요, 아니면 진행 상황을 추적하는 봉우리로 만들까요?" 처럼 물어본다.
 - 캘린더 화면에서 추가하는 일정은 기본적으로 create_calendar_event를 우선 고려한다.
 - 어느 쪽이든 날짜는 YYYY-MM-DD로 변환한다 ("오늘"→{today_str}, "내일"→계산).
+- 순수 일정에 시간이 언급되면 create_calendar_event의 time을 HH:MM으로 설정하고
+  all_day=false로 둔다. 종료 시간이 명확하지 않으면 1시간 뒤를 end_time으로 둔다.
+  시간이 없거나 "하루 종일"이면 all_day=true로 두고 time/end_time은 생략한다.
+- "매일/매주/매월/매년"처럼 반복이 언급되면 repeat_rule을 daily/weekly/monthly/yearly로 설정한다.
 
 ### 일정 조회 — 두 종류를 모두 확인한다 (중요)
 일정은 두 곳에 나뉘어 있다. 일정 조회·설명 요청("오늘 일정", "이번 주 일정",

@@ -16,6 +16,54 @@ from app.services.plant_service import PlantService
 router = APIRouter(tags=["stats"])
 
 
+def _parse_event_date(value) -> date:
+    return date.fromisoformat(str(value)[:10])
+
+
+def _event_duration_days(start: date, end: date) -> int:
+    return max(0, (end - start).days)
+
+
+def _occurrence_starts(ev, d_from: date, d_to: date) -> list[date]:
+    start = _parse_event_date(ev.event_date)
+    rule = getattr(ev, "repeat_rule", "none") or "none"
+    if rule == "none":
+        end = _parse_event_date(getattr(ev, "end_date", ev.event_date))
+        if end < d_from or start > d_to:
+            return []
+        return [start]
+
+    starts: list[date] = []
+    cur = start
+    if rule == "daily":
+        cur = max(start, d_from)
+        while cur <= d_to:
+            starts.append(cur)
+            cur += timedelta(days=1)
+        return starts
+
+    while cur <= d_to:
+        if cur >= d_from:
+            starts.append(cur)
+        if rule == "weekly":
+            cur += timedelta(days=7)
+        elif rule == "monthly":
+            year = cur.year + (cur.month // 12)
+            month = (cur.month % 12) + 1
+            try:
+                cur = cur.replace(year=year, month=month)
+            except ValueError:
+                cur = date(year, month, 1)
+        elif rule == "yearly":
+            try:
+                cur = cur.replace(year=cur.year + 1)
+            except ValueError:
+                cur = date(cur.year + 1, 3, 1)
+        else:
+            return []
+    return starts
+
+
 @router.get("/stats/summary")
 def get_summary(user=Depends(require_user), db: Client = Depends(get_db)):
     summary = GardenStateService(db).refresh_summary(user.id)
@@ -74,18 +122,33 @@ def get_calendar(
         ed_raw = getattr(ev, "event_date", None)
         if not ed_raw:
             continue
-        key = str(ed_raw)[:10]
-        events.setdefault(key, []).append({
-            "id": ev.id,
-            "title": ev.title,
-            "status": "event",
-            "type": "event",
-            "detail": getattr(ev, "detail", "") or "",
-            "plant_name": plant_names.get(getattr(ev, "plant_id", None), ""),
-            "plant_id": getattr(ev, "plant_id", None),
-            "color": getattr(ev, "color", DEFAULT_CALENDAR_EVENT_COLOR),
-            "source": "event",
-        })
+        start = _parse_event_date(ev.event_date)
+        end = _parse_event_date(getattr(ev, "end_date", ev.event_date))
+        duration_days = _event_duration_days(start, end)
+        for occurrence_start in _occurrence_starts(ev, d_from, d_to):
+            for offset in range(duration_days + 1):
+                occurrence_day = occurrence_start + timedelta(days=offset)
+                if occurrence_day < d_from or occurrence_day > d_to:
+                    continue
+                key = occurrence_day.isoformat()
+                events.setdefault(key, []).append({
+                    "id": ev.id,
+                    "title": ev.title,
+                    "status": "event",
+                    "type": "event",
+                    "detail": getattr(ev, "detail", "") or "",
+                    "plant_name": plant_names.get(getattr(ev, "plant_id", None), ""),
+                    "plant_id": getattr(ev, "plant_id", None),
+                    "date": str(getattr(ev, "event_date", ""))[:10],
+                    "end_date": str(getattr(ev, "end_date", getattr(ev, "event_date", "")))[:10],
+                    "time": str(getattr(ev, "event_time", ""))[:5] if getattr(ev, "event_time", None) else None,
+                    "end_time": str(getattr(ev, "end_time", ""))[:5] if getattr(ev, "end_time", None) else None,
+                    "all_day": bool(getattr(ev, "all_day", True)),
+                    "repeat_rule": getattr(ev, "repeat_rule", "none") or "none",
+                    "occurrence_date": key,
+                    "color": getattr(ev, "color", DEFAULT_CALENDAR_EVENT_COLOR),
+                    "source": "event",
+                })
 
     return {"ok": True, "data": {"events": events}}
 
@@ -95,6 +158,11 @@ def get_calendar(
 class CalendarEventCreate(BaseModel):
     title: str
     date: str                       # YYYY-MM-DD
+    time: str | None = None         # HH:MM start time, omitted for all-day events
+    end_date: str | None = None     # YYYY-MM-DD
+    end_time: str | None = None     # HH:MM end time, omitted for all-day events
+    all_day: bool = True
+    repeat_rule: str = "none"
     plant_id: str | None = None     # which plant this schedule relates to
     detail: str = ""
     color: CalendarEventColor = DEFAULT_CALENDAR_EVENT_COLOR
@@ -103,6 +171,11 @@ class CalendarEventCreate(BaseModel):
 class CalendarEventUpdate(BaseModel):
     title: str | None = None
     date: str | None = None
+    time: str | None = None
+    end_date: str | None = None
+    end_time: str | None = None
+    all_day: bool | None = None
+    repeat_rule: str | None = None
     plant_id: str | None = None
     detail: str | None = None
     color: CalendarEventColor | None = None
@@ -119,12 +192,23 @@ def _parse_date(s: str) -> date:
 def create_calendar_event(body: CalendarEventCreate, user=Depends(require_user), db: Client = Depends(get_db)):
     if not body.title.strip():
         raise HTTPException(400, "일정 제목을 입력해주세요.")
-    ev = CalendarService(db).create(
-        user.id, body.plant_id, body.title.strip(), body.detail, _parse_date(body.date), body.color
-    )
+    try:
+        ev = CalendarService(db).create(
+            user.id, body.plant_id, body.title.strip(), body.detail, _parse_date(body.date),
+            body.time, _parse_date(body.end_date) if body.end_date else None,
+            body.end_time, body.all_day, body.repeat_rule, body.color
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     return {"ok": True, "data": {
         "id": ev.id, "title": ev.title, "detail": ev.detail,
-        "date": str(ev.event_date)[:10], "plant_id": ev.plant_id, "color": ev.color,
+        "date": str(ev.event_date)[:10],
+        "end_date": str(getattr(ev, "end_date", ev.event_date))[:10],
+        "time": str(getattr(ev, "event_time", ""))[:5] if getattr(ev, "event_time", None) else None,
+        "end_time": str(getattr(ev, "end_time", ""))[:5] if getattr(ev, "end_time", None) else None,
+        "all_day": bool(getattr(ev, "all_day", True)),
+        "repeat_rule": getattr(ev, "repeat_rule", "none") or "none",
+        "plant_id": ev.plant_id, "color": ev.color,
     }}
 
 
@@ -139,15 +223,33 @@ def update_calendar_event(event_id: str, body: CalendarEventUpdate, user=Depends
         fields["plant_id"] = body.plant_id
     if body.date is not None:
         fields["event_date"] = _parse_date(body.date)
+    if body.end_date is not None:
+        fields["end_date"] = _parse_date(body.end_date)
+    if body.all_day is not None:
+        fields["all_day"] = body.all_day
+    if "time" in body.model_fields_set:
+        fields["event_time"] = body.time
+    if "end_time" in body.model_fields_set:
+        fields["end_time"] = body.end_time
+    if body.repeat_rule is not None:
+        fields["repeat_rule"] = body.repeat_rule
     if body.color is not None:
         fields["color"] = body.color
     try:
         ev = CalendarService(db).update(user.id, event_id, fields)
     except ValueError as e:
-        raise HTTPException(404, str(e))
+        message = str(e)
+        status = 404 if "찾을 수 없습니다" in message else 400
+        raise HTTPException(status, message)
     return {"ok": True, "data": {
         "id": ev.id, "title": ev.title, "detail": ev.detail,
-        "date": str(ev.event_date)[:10], "plant_id": ev.plant_id, "color": ev.color,
+        "date": str(ev.event_date)[:10],
+        "end_date": str(getattr(ev, "end_date", ev.event_date))[:10],
+        "time": str(getattr(ev, "event_time", ""))[:5] if getattr(ev, "event_time", None) else None,
+        "end_time": str(getattr(ev, "end_time", ""))[:5] if getattr(ev, "end_time", None) else None,
+        "all_day": bool(getattr(ev, "all_day", True)),
+        "repeat_rule": getattr(ev, "repeat_rule", "none") or "none",
+        "plant_id": ev.plant_id, "color": ev.color,
     }}
 
 
