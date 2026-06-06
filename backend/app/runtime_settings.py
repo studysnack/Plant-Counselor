@@ -18,7 +18,7 @@ _SNAPSHOT_PATH = Path(__file__).parent.parent / "runtime_settings.json"
 
 DEFAULTS: dict[str, Any] = {
     # LLM
-    "llm_default_model": "gemini-2.5-flash",
+    "llm_default_model": "gemini-3-flash-preview",
     "llm_max_steps": 10,
     "llm_temperature": None,       # None = use Gemini default
 
@@ -50,16 +50,16 @@ DEFAULTS: dict[str, Any] = {
 }
 
 # Available Gemini models (listed for the admin UI dropdowns).
-# Ordered newest/most-capable first. The exact API model IDs follow Google's
-# convention (gemini-<version>-<tier>); if a brand-new ID is not yet served by
-# the API it will surface as a "모델 없음 (404)" error in the admin AI logs page.
+# Ordered newest/most-capable first. IDs verified against Google AI docs
+# (2026-06): the 3.x series uses the `-preview` suffix; `gemini-3-pro-preview`
+# was discontinued (2026-03) in favor of `gemini-3.1-pro-preview`. A non-served
+# ID surfaces as a "모델 없음 (404)" error in the admin AI logs page.
 AVAILABLE_MODELS = [
-    # Gemini 3.5 (최신 — 에이전트/코딩 특화)
-    "gemini-3.5-flash",
-    # Gemini 3.x (고성능 플래그십 + 실시간 Flash)
-    "gemini-3.1-pro",
-    "gemini-3-pro",
-    "gemini-3-flash",
+    # Gemini 3.x (최신 — preview 계열)
+    "gemini-3.5-flash",            # 3.5 Flash (최신 플래시)
+    "gemini-3.1-pro-preview",      # 3.1 Pro (고성능 플래그십)
+    "gemini-3-flash-preview",      # 3 Flash Preview (기본값 — 빠르고 저비용)
+    "gemini-3.1-flash-lite",       # 3.1 Flash-Lite (최저비용·고할당량)
     # Gemini 2.5 (멀티모달 Pro + 일상 Flash 계열)
     "gemini-2.5-pro",
     "gemini-2.5-flash",
@@ -69,7 +69,6 @@ AVAILABLE_MODELS = [
     "gemini-2.0-flash-lite",
     "gemini-1.5-flash",
     "gemini-1.5-pro",
-    "gemini-1.0-pro",
 ]
 
 # ── Live store ────────────────────────────────────────────────────────────────
