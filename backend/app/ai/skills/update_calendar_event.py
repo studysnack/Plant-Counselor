@@ -15,7 +15,16 @@ class UpdateCalendarEventSkill(SkillBase):
         "properties": {
             "event_id": {"type": "string", "description": "수정할 일정 ID"},
             "title": {"type": "string", "description": "새 제목 (선택)"},
-            "date": {"type": "string", "description": "새 날짜 YYYY-MM-DD (선택)"},
+            "date": {"type": "string", "description": "새 시작 날짜 YYYY-MM-DD (선택)"},
+            "time": {"type": "string", "description": "새 시작 시간 HH:MM (선택, 하루 종일이면 null 또는 생략)"},
+            "end_date": {"type": "string", "description": "새 종료 날짜 YYYY-MM-DD (선택)"},
+            "end_time": {"type": "string", "description": "새 종료 시간 HH:MM (선택, 하루 종일이면 null 또는 생략)"},
+            "all_day": {"type": "boolean", "description": "하루 종일 일정 여부 (선택)"},
+            "repeat_rule": {
+                "type": "string",
+                "enum": ["none", "daily", "weekly", "monthly", "yearly"],
+                "description": "새 반복 규칙 (선택)",
+            },
             "detail": {"type": "string", "description": "새 세부 정보 (선택)"},
             "plant_id": {"type": "string", "description": "연결할 식물 ID (선택)"},
             "color": {
@@ -43,19 +52,35 @@ class UpdateCalendarEventSkill(SkillBase):
             fields["plant_id"] = args["plant_id"]
         if args.get("color") is not None:
             fields["color"] = args["color"]
+        if args.get("all_day") is not None:
+            fields["all_day"] = bool(args["all_day"])
+        if "time" in args:
+            fields["event_time"] = args.get("time")
+        if "end_time" in args:
+            fields["end_time"] = args.get("end_time")
+        if args.get("repeat_rule") is not None:
+            fields["repeat_rule"] = args["repeat_rule"]
         if args.get("date") is not None:
             from datetime import date
             try:
                 fields["event_date"] = date.fromisoformat(str(args["date"])[:10])
             except (ValueError, TypeError):
                 return SkillResult(ok=False, message="날짜 형식이 올바르지 않습니다. (YYYY-MM-DD)", error_code="bad_date")
+        if args.get("end_date") is not None:
+            from datetime import date
+            try:
+                fields["end_date"] = date.fromisoformat(str(args["end_date"])[:10])
+            except (ValueError, TypeError):
+                return SkillResult(ok=False, message="종료 날짜 형식이 올바르지 않습니다. (YYYY-MM-DD)", error_code="bad_date")
         if not fields:
             return SkillResult(ok=False, message="수정할 내용이 없습니다.", error_code="no_fields")
 
         try:
             ev = ctx.calendar_service.update(ctx.user_id, args["event_id"], fields)
         except ValueError as e:
-            return SkillResult(ok=False, message=str(e), error_code="not_found")
+            message = str(e)
+            code = "not_found" if "찾을 수 없습니다" in message else "bad_time"
+            return SkillResult(ok=False, message=message, error_code=code)
         return SkillResult(
             ok=True,
             message=f"일정 '{ev.title}'을(를) 수정했습니다.",

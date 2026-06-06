@@ -252,6 +252,179 @@ a { color: inherit; text-decoration: none; }
   gap: 12px;
 }
 
+.calendar-all-day-toggle {
+  width: 100%;
+  min-height: 38px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-subtle);
+  color: var(--fg-secondary);
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 9px;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+
+.calendar-all-day-toggle:hover {
+  background: var(--bg-hover);
+}
+
+.calendar-all-day-toggle > span {
+  width: 30px;
+  height: 18px;
+  border-radius: var(--r-pill);
+  background: var(--border-strong);
+  position: relative;
+  flex-shrink: 0;
+  transition: background 0.12s;
+}
+
+.calendar-all-day-toggle > span::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-sm);
+  transition: transform 0.12s;
+}
+
+.calendar-all-day-toggle[data-active="true"] {
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+  background: var(--accent-muted);
+  color: var(--accent-fg);
+}
+
+.calendar-all-day-toggle[data-active="true"] > span {
+  background: var(--accent);
+}
+
+.calendar-all-day-toggle[data-active="true"] > span::after {
+  transform: translateX(12px);
+}
+
+.calendar-time-box {
+  margin-bottom: 14px;
+  border-radius: var(--r-lg);
+  overflow: hidden;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+}
+
+.calendar-time-summary {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  padding: 13px 14px;
+  color: var(--fg);
+  cursor: pointer;
+  text-align: left;
+  display: grid;
+  gap: 8px;
+  font: inherit;
+}
+
+.calendar-time-summary:hover {
+  background: var(--bg-hover);
+}
+
+.calendar-time-summary > span:first-child {
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.calendar-time-summary > span:last-child {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg-secondary);
+}
+
+.calendar-time-details {
+  padding: 12px 14px 14px;
+  border-top: 1px solid var(--border);
+  display: grid;
+  gap: 8px;
+  background: color-mix(in srgb, var(--bg-elevated) 56%, var(--bg-subtle));
+}
+
+.calendar-time-row {
+  display: grid;
+  grid-template-columns: 78px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  min-height: 42px;
+  padding: 2px 0;
+}
+
+.calendar-time-row > span {
+  color: var(--fg-muted);
+  font-size: 13px;
+  font-weight: 600;
+  text-align: right;
+}
+
+.calendar-time-inputs {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 0.8fr);
+  gap: 8px;
+}
+
+.calendar-time-row input,
+.calendar-time-row select {
+  background: var(--bg-elevated) !important;
+  border-color: var(--border-strong) !important;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--bg-elevated) 65%, transparent);
+}
+
+.calendar-time-row input:focus,
+.calendar-time-row select:focus {
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.calendar-mini-switch {
+  width: 38px;
+  height: 22px;
+  border: 1px solid color-mix(in srgb, var(--border-strong) 70%, transparent);
+  border-radius: var(--r-pill);
+  background: color-mix(in srgb, var(--fg-muted) 18%, var(--bg-subtle));
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  padding: 2px;
+  transition: background 0.12s, border-color 0.12s;
+}
+
+.calendar-mini-switch > span {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--bg-elevated);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.22);
+  transition: transform 0.12s;
+}
+
+.calendar-mini-switch[data-active="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.calendar-mini-switch[data-active="true"] > span {
+  background: var(--bg-elevated);
+  transform: translateX(16px);
+}
+
 .settings-layout {
   display: grid;
   grid-template-columns: 180px minmax(0, 1fr);
@@ -262,6 +435,75 @@ a { color: inherit; text-decoration: none; }
   display: flex;
   flex-direction: column;
   gap: 2px;
+}
+
+.settings-tab-button {
+  width: 100%;
+  min-height: 36px;
+  padding: 8px 12px;
+  border: 1px solid transparent;
+  border-radius: var(--r-md);
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+  font-size: 13.5px;
+  font-weight: 500;
+  text-align: left;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+
+.settings-tab-button:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+
+.settings-tab-button[data-active="true"] {
+  background: var(--bg-elevated);
+  border-color: var(--border);
+  color: var(--fg);
+  box-shadow: var(--shadow-xs);
+  font-weight: 700;
+}
+
+.settings-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(180px, max-content);
+  align-items: center;
+  gap: 18px;
+  padding: 13px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.settings-row-copy {
+  min-width: 0;
+}
+
+.settings-row-action {
+  min-width: 0;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.settings-row-action > .btn {
+  min-width: 88px;
+}
+
+.settings-action-group {
+  width: min(100%, 360px);
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.settings-action-group .input {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+
+.settings-action-group .btn {
+  flex: 0 0 auto;
+  min-width: 64px;
 }
 
 .history-shell {
@@ -377,9 +619,33 @@ a { color: inherit; text-decoration: none; }
   }
 
   .settings-tabs {
-    flex-direction: row;
-    flex-wrap: wrap;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(92px, 1fr));
     gap: 6px;
+    padding: 4px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-lg);
+    background: var(--bg-elevated);
+  }
+
+  .settings-tab-button {
+    text-align: center;
+  }
+
+  .settings-row {
+    grid-template-columns: 1fr;
+    align-items: start;
+    gap: 10px;
+  }
+
+  .settings-row-action {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .settings-action-group {
+    width: 100%;
+    justify-content: flex-start;
   }
 
   .history-shell {

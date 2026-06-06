@@ -37,10 +37,15 @@ def _lit(v: Any) -> str:
     """
     if v is None:
         return "NULL"
+    if isinstance(v, bool):
+        return "true" if v else "false"
     return "'" + str(v).replace("'", "''") + "'"
 
 
-_COLS = "id, user_id, plant_id, title, detail, event_date, color"
+_COLS = (
+    "id, user_id, plant_id, title, detail, event_date, event_time, "
+    "end_date, end_time, all_day, repeat_rule, color"
+)
 
 
 class CalendarEventRepository:
@@ -71,26 +76,37 @@ class CalendarEventRepository:
         title: str,
         detail: str,
         event_date: date,
+        event_time: str | None,
+        end_date: date,
+        end_time: str | None,
+        all_day: bool,
+        repeat_rule: str,
         color: str,
     ) -> SimpleNamespace:
         eid = str(ULID())
         vals = ", ".join([
             _lit(eid), _lit(user_id), _lit(plant_id),
-            _lit(title), _lit(detail or ""), _lit(event_date.isoformat()), _lit(color),
+            _lit(title), _lit(detail or ""), _lit(event_date.isoformat()),
+            _lit(None if all_day else event_time), _lit(end_date.isoformat()),
+            _lit(None if all_day else end_time), _lit(all_day), _lit(repeat_rule), _lit(color),
         ])
         self._exec(f"insert into calendar_events ({_COLS}) values ({vals})")
         return SimpleNamespace(
             id=eid, user_id=user_id, plant_id=plant_id,
-            title=title, detail=detail or "", event_date=event_date.isoformat(), color=color,
+            title=title, detail=detail or "", event_date=event_date.isoformat(),
+            event_time=None if all_day else event_time, end_date=end_date.isoformat(),
+            end_time=None if all_day else end_time, all_day=all_day, repeat_rule=repeat_rule, color=color,
         )
 
     def list_range(self, user_id: str, d_from: date, d_to: date) -> list[SimpleNamespace]:
         sql = (
             f"select {_COLS} from calendar_events "
             f"where user_id = {_lit(user_id)} "
-            f"and event_date >= {_lit(d_from.isoformat())} "
-            f"and event_date <= {_lit(d_to.isoformat())} "
-            f"order by event_date"
+            f"and ("
+            f"(repeat_rule = 'none' and event_date <= {_lit(d_to.isoformat())} and end_date >= {_lit(d_from.isoformat())}) "
+            f"or (repeat_rule <> 'none' and event_date <= {_lit(d_to.isoformat())})"
+            f") "
+            f"order by event_date, all_day desc, event_time nulls first"
         )
         return _rows(self._select(sql))
 
@@ -104,8 +120,11 @@ class CalendarEventRepository:
 
     def update(self, user_id: str, event_id: str, fields: dict) -> SimpleNamespace | None:
         sets: list[str] = []
-        for key in ("title", "detail", "plant_id", "event_date", "color"):
-            if key in fields and (fields[key] is not None or key == "plant_id"):
+        for key in (
+            "title", "detail", "plant_id", "event_date", "event_time",
+            "end_date", "end_time", "all_day", "repeat_rule", "color",
+        ):
+            if key in fields and (fields[key] is not None or key in ("plant_id", "event_time", "end_time")):
                 val = fields[key]
                 if key == "event_date" and isinstance(val, date):
                     val = val.isoformat()

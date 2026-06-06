@@ -7,7 +7,7 @@ import { useRouter } from "next/navigation";
 import {
   getCalendar, getSummary, getBriefing,
   createCalendarEvent, updateCalendarEvent, deleteCalendarEvent,
-  type CalendarEventColor, type CalEvent,
+  type CalendarEventColor, type CalendarEventRepeatRule, type CalEvent,
 } from "@/lib/api/stats";
 import { listPlants, Plant } from "@/lib/api/plants";
 import { useChatStore } from "@/lib/store/chatStore";
@@ -30,11 +30,72 @@ const EVENT_COLOR_OPTIONS: { id: CalendarEventColor; label: string; value: strin
 const EVENT_COLOR_VALUE = Object.fromEntries(
   EVENT_COLOR_OPTIONS.map(({ id, value }) => [id, value])
 ) as Record<CalendarEventColor, string>;
+const REPEAT_OPTIONS: { id: CalendarEventRepeatRule; label: string }[] = [
+  { id: "none", label: "안 함" },
+  { id: "daily", label: "매일" },
+  { id: "weekly", label: "매주" },
+  { id: "monthly", label: "매월" },
+  { id: "yearly", label: "매년" },
+];
+const REPEAT_LABEL: Record<CalendarEventRepeatRule, string> = Object.fromEntries(
+  REPEAT_OPTIONS.map(({ id, label }) => [id, label])
+) as Record<CalendarEventRepeatRule, string>;
 
 function daysInMonth(y: number, m: number) { return new Date(y, m + 1, 0).getDate(); }
 function firstWeekday(y: number, m: number) { return (new Date(y, m, 1).getDay() + 6) % 7; }
 function ymd(y: number, m: number, d: number) {
   return `${y}-${String(m + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+}
+function defaultEventTime() {
+  return "12:00";
+}
+
+function addOneHour(value: string) {
+  const [hRaw, mRaw] = value.split(":");
+  const hour = Number(hRaw);
+  const minute = Number(mRaw);
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return "13:00";
+  return `${String(Math.min(hour + 1, 23)).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+}
+
+function dateLabel(value: string) {
+  const [year, month, day] = value.split("-");
+  if (!year || !month || !day) return value;
+  return `${Number(year)}. ${Number(month)}. ${Number(day)}.`;
+}
+
+function timeLabel(value: string) {
+  const [hourRaw, minute = "00"] = value.split(":");
+  const hour = Number(hourRaw);
+  if (!Number.isFinite(hour)) return value;
+  const period = hour < 12 ? "오전" : "오후";
+  const displayHour = hour % 12 || 12;
+  return `${period} ${displayHour}:${minute}`;
+}
+
+function eventRangeSummary(startDate: string, endDate: string, startTime: string, endTime: string, allDay: boolean) {
+  if (allDay) {
+    return startDate === endDate
+      ? `${dateLabel(startDate)} 하루 종일`
+      : `${dateLabel(startDate)}–${dateLabel(endDate)} 하루 종일`;
+  }
+  if (startDate === endDate) {
+    return `${dateLabel(startDate)} ${timeLabel(startTime)}–${timeLabel(endTime)}`;
+  }
+  return `${dateLabel(startDate)} ${timeLabel(startTime)}–${dateLabel(endDate)} ${timeLabel(endTime)}`;
+}
+
+function eventTimeLabel(ev: CalEvent): string | null {
+  if (ev.source !== "event") return null;
+  if (ev.all_day ?? true) return "하루 종일";
+  if (!ev.time) return null;
+  return ev.end_time ? `${ev.time}–${ev.end_time}` : ev.time;
+}
+
+function eventSortValue(ev: CalEvent): string {
+  if (ev.source !== "event") return `1-${ev.title}`;
+  if (ev.all_day ?? true) return `0-00:00-${ev.title}`;
+  return `2-${ev.time ?? "99:99"}-${ev.title}`;
 }
 
 /** Standalone events use their selected palette colour; bud deadlines use
@@ -106,7 +167,10 @@ export default function CalendarPage() {
 
   const selectedKey = selected ? ymd(year, month, selected) : null;
   const todayKey = ymd(today.getFullYear(), today.getMonth(), today.getDate());
-  const selectedEvents: CalEvent[] = selectedKey ? events[selectedKey] ?? [] : [];
+  const selectedEvents: CalEvent[] = useMemo(
+    () => selectedKey ? [...(events[selectedKey] ?? [])].sort((a, b) => eventSortValue(a).localeCompare(eventSortValue(b))) : [],
+    [events, selectedKey]
+  );
   const selectedLabel = selected ? `${month + 1}월 ${selected}일` : "날짜를 선택하세요";
 
   /** Open the calendar AI and actually ask it to explain the selected schedule
@@ -300,8 +364,15 @@ function EventModal({
   onClose: () => void;
   onSaved: () => void;
 }) {
+  const initialStartTime = event?.time ?? defaultEventTime();
   const [title, setTitle] = useState(event?.title ?? "");
-  const [date, setDate] = useState(initialDate);
+  const [startDate, setStartDate] = useState(event?.date ?? initialDate);
+  const [endDate, setEndDate] = useState(event?.end_date ?? event?.date ?? initialDate);
+  const [allDay, setAllDay] = useState(event ? event.all_day ?? true : false);
+  const [startTime, setStartTime] = useState(initialStartTime);
+  const [endTime, setEndTime] = useState(event?.end_time ?? addOneHour(initialStartTime));
+  const [repeatRule, setRepeatRule] = useState<CalendarEventRepeatRule>(event?.repeat_rule ?? "none");
+  const [timeOpen, setTimeOpen] = useState(false);
   const [plantId, setPlantId] = useState<string>(event ? event.plant_id ?? "" : plants[0]?.id ?? "");
   const [detail, setDetail] = useState(event?.detail ?? "");
   const [color, setColor] = useState<CalendarEventColor>(event?.color ?? "olive");
@@ -311,12 +382,20 @@ function EventModal({
 
   async function submit() {
     if (!title.trim()) { setErr("일정 제목을 입력해주세요."); return; }
-    if (!date) { setErr("날짜를 선택해주세요."); return; }
+    if (!startDate || !endDate) { setErr("시작과 종료 날짜를 선택해주세요."); return; }
+    if (endDate < startDate) { setErr("종료 날짜는 시작 날짜보다 빠를 수 없습니다."); return; }
+    if (!allDay && (!startTime || !endTime)) { setErr("시작과 종료 시간을 선택하거나 하루 종일을 켜주세요."); return; }
+    if (!allDay && endDate === startDate && endTime <= startTime) { setErr("종료 시간은 시작 시간보다 뒤여야 합니다."); return; }
     setSaving(true);
     setErr("");
     const body = {
       title: title.trim(),
-      date,
+      date: startDate,
+      end_date: endDate,
+      time: allDay ? null : startTime,
+      end_time: allDay ? null : endTime,
+      all_day: allDay,
+      repeat_rule: repeatRule,
       plant_id: plantId || null,
       detail: detail.trim(),
       color,
@@ -336,7 +415,7 @@ function EventModal({
     >
       <div
         className="card"
-        style={{ width: 420, maxWidth: "92vw", padding: "22px 24px", boxShadow: "var(--shadow-lg)" }}
+        style={{ width: 540, maxWidth: "92vw", padding: "22px 24px", boxShadow: "var(--shadow-lg)" }}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="t-h2" style={{ color: "var(--fg)", marginBottom: 16 }}>일정 {editing ? "수정" : "추가"}</div>
@@ -352,9 +431,77 @@ function EventModal({
           />
         </Field>
 
-        <Field label="날짜">
-          <input type="date" value={date} onChange={(e) => setDate(e.target.value)} style={inputStyle} />
-        </Field>
+        <div className="calendar-time-box">
+          <button
+            type="button"
+            className="calendar-time-summary"
+            aria-expanded={timeOpen}
+            onClick={() => setTimeOpen((v) => !v)}
+          >
+            <span>{eventRangeSummary(startDate, endDate, startTime, endTime, allDay)}</span>
+            <span>이벤트 시간에 알림</span>
+          </button>
+
+          {timeOpen && (
+            <div className="calendar-time-details">
+              <div className="calendar-time-row">
+                <span>하루 종일:</span>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={allDay}
+                  onClick={() => setAllDay((v) => !v)}
+                  className="calendar-mini-switch"
+                  data-active={allDay}
+                >
+                  <span />
+                </button>
+              </div>
+              <div className="calendar-time-row">
+                <span>시작:</span>
+                <div className="calendar-time-inputs">
+                  <input
+                    type="date"
+                    value={startDate}
+                    onChange={(e) => {
+                      const next = e.target.value;
+                      setStartDate(next);
+                      if (endDate < next) setEndDate(next);
+                    }}
+                    style={inputStyle}
+                  />
+                  {!allDay && (
+                    <input
+                      type="time"
+                      value={startTime}
+                      onChange={(e) => {
+                        const next = e.target.value;
+                        setStartTime(next);
+                        if (!endTime || (endDate === startDate && endTime <= next)) setEndTime(addOneHour(next));
+                      }}
+                      style={inputStyle}
+                    />
+                  )}
+                </div>
+              </div>
+              <div className="calendar-time-row">
+                <span>종료:</span>
+                <div className="calendar-time-inputs">
+                  <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} style={inputStyle} />
+                  {!allDay && (
+                    <input type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} style={inputStyle} />
+                  )}
+                </div>
+              </div>
+              <div className="calendar-time-row">
+                <span>반복:</span>
+                <select value={repeatRule} onChange={(e) => setRepeatRule(e.target.value as CalendarEventRepeatRule)} style={inputStyle}>
+                  {REPEAT_OPTIONS.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
+                </select>
+              </div>
+            </div>
+          )}
+        </div>
 
         <Field label="관련 식물">
           {plants.length === 0 ? (
@@ -435,6 +582,13 @@ const inputStyle: React.CSSProperties = {
 // ── Event card with plant name + detail ─────────────────────
 
 function EventCard({ ev, onClick, onEdit, onDelete }: { ev: CalEvent; onClick: () => void; onEdit?: () => void; onDelete?: () => void }) {
+  const metaParts = [
+    eventTimeLabel(ev),
+    ev.source === "event" && ev.repeat_rule && ev.repeat_rule !== "none" ? `반복 ${REPEAT_LABEL[ev.repeat_rule]}` : null,
+    ev.plant_name || null,
+    ev.detail ? (ev.detail.length > 34 ? ev.detail.slice(0, 34) + "..." : ev.detail) : null,
+  ].filter(Boolean);
+
   return (
     <li>
       <div style={{
@@ -451,20 +605,17 @@ function EventCard({ ev, onClick, onEdit, onDelete }: { ev: CalEvent; onClick: (
           <div className="t-body-sm" style={{ color: "var(--fg)", fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
             {ev.title}
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 3 }}>
-            {ev.plant_name && (
-              <span className="badge badge-muted" style={{ fontSize: 10, height: 18, padding: "0 6px" }}>{ev.plant_name}</span>
-            )}
-            {ev.detail && (
-              <span className="t-caption" style={{ color: "var(--fg-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                {ev.detail.length > 30 ? ev.detail.slice(0, 30) + "..." : ev.detail}
-              </span>
-            )}
-          </div>
+          {metaParts.length > 0 && (
+            <div className="t-caption" style={{ color: "var(--fg-muted)", marginTop: 3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {metaParts.join(" · ")}
+            </div>
+          )}
         </button>
-        <span className="badge badge-muted" style={{ flexShrink: 0, fontSize: 10, height: 18, padding: "0 6px" }}>
-          {ev.source === "event" ? "일정" : ev.type === "schedule" ? "봉우리·일정" : "봉우리·고민"}
-        </span>
+        {ev.source !== "event" && (
+          <span className="badge badge-muted" style={{ flexShrink: 0, fontSize: 10, height: 18, padding: "0 6px" }}>
+            {ev.type === "schedule" ? "봉우리·일정" : "봉우리·고민"}
+          </span>
+        )}
         {onEdit && (
           <button
             onClick={onEdit}

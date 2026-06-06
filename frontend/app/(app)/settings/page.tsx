@@ -6,7 +6,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useAuthStore } from "@/lib/store/authStore";
 import { useThemeStore, ThemeMode } from "@/lib/store/themeStore";
 import { supabase } from "@/lib/supabase";
-import { apiPatch, apiPut, apiDelete } from "@/lib/api/client";
+import { apiPatch, apiDelete } from "@/lib/api/client";
 import type { UserProfile } from "@/lib/store/authStore";
 
 const TABS = [
@@ -36,10 +36,6 @@ async function updateMe(fields: Record<string, unknown>) {
   return apiPatch<UserProfile>("/me", fields);
 }
 
-async function setApiKey(api_key: string) {
-  return apiPut<unknown>("/me/api-key", { api_key });
-}
-
 export default function SettingsPage() {
   const router = useRouter();
   const qc = useQueryClient();
@@ -47,7 +43,6 @@ export default function SettingsPage() {
   const { mode, setMode } = useThemeStore();
 
   const [tab, setTab] = useState<TabId>("account");
-  const [apiKeyVal, setApiKeyVal] = useState("");
   const [deleteConfirmInput, setDeleteConfirmInput] = useState("");
   const [msg, setMsg] = useState<{ text: string; ok: boolean } | null>(null);
   const [saving, setSaving] = useState(false);
@@ -62,15 +57,6 @@ export default function SettingsPage() {
     clearSession();
     qc.clear();
     router.replace("/login");
-  }
-
-  async function handleSaveApiKey() {
-    if (!apiKeyVal.trim()) return;
-    setSaving(true);
-    const res = await setApiKey(apiKeyVal.trim());
-    setSaving(false);
-    if (res.ok) { notify("API 키를 저장했습니다."); setApiKeyVal(""); }
-    else notify("저장 실패", false);
   }
 
   async function handleSetTone(tone: string) {
@@ -133,14 +119,10 @@ export default function SettingsPage() {
           {TABS.map((t) => (
             <button
               key={t.id}
+              className="settings-tab-button"
+              data-active={tab === t.id}
+              aria-pressed={tab === t.id}
               onClick={() => setTab(t.id)}
-              style={{
-                textAlign: "left", padding: "8px 12px", borderRadius: "var(--r-md)",
-                background: tab === t.id ? "var(--bg-subtle)" : "transparent",
-                color: tab === t.id ? "var(--fg)" : "var(--fg-muted)",
-                border: "none", cursor: "pointer", fontSize: 13.5,
-                fontWeight: tab === t.id ? 600 : 400, transition: "all 0.1s",
-              }}
             >
               {t.label}
             </button>
@@ -166,13 +148,13 @@ export default function SettingsPage() {
 
               <SubSection title="계정 삭제">
                 <Row label="데이터 영구 삭제" sub="모든 식물, 봉우리, 대화 기록이 삭제됩니다">
-                  <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                  <ActionGroup>
                     <input
                       className="input"
                       value={deleteConfirmInput}
                       onChange={(e) => setDeleteConfirmInput(e.target.value)}
                       placeholder={user?.email ?? user?.nickname ?? "이메일 입력"}
-                      style={{ width: "min(100%, 240px)", fontSize: 13 }}
+                      style={{ fontSize: 13 }}
                     />
                     <button
                       className="btn btn-danger btn-sm"
@@ -181,7 +163,7 @@ export default function SettingsPage() {
                     >
                       삭제
                     </button>
-                  </div>
+                  </ActionGroup>
                 </Row>
               </SubSection>
             </Section>
@@ -189,20 +171,8 @@ export default function SettingsPage() {
 
           {tab === "ai" && (
             <Section title="AI 설정">
-              <Row label="Gemini API 키" sub="저장 시 암호화하여 보관합니다">
-                <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-                  <input
-                    className="input"
-                    type="password"
-                    value={apiKeyVal}
-                    onChange={(e) => setApiKeyVal(e.target.value)}
-                    placeholder="AIzaSy…"
-                    style={{ width: "min(100%, 280px)" }}
-                  />
-                  <button className="btn btn-primary btn-sm" onClick={handleSaveApiKey} disabled={saving}>
-                    저장
-                  </button>
-                </div>
+              <Row label="Gemini API 키" sub="서버 환경변수 LLM_API_KEY로 관리합니다">
+                <span className="t-body-sm" style={{ color: "var(--fg-muted)" }}>서버 관리</span>
               </Row>
 
               <SubSection title="응답 톤">
@@ -291,17 +261,18 @@ function SubSection({ title, children }: { title: string; children: React.ReactN
 
 function Row({ label, sub, children }: { label: string; sub?: string; children: React.ReactNode }) {
   return (
-    <div style={{
-      display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16,
-      padding: "12px 0", borderBottom: "1px solid var(--border)",
-    }}>
-      <div>
+    <div className="settings-row">
+      <div className="settings-row-copy">
         <div className="t-body-sm" style={{ color: "var(--fg)", fontWeight: 500 }}>{label}</div>
         {sub && <div className="t-caption" style={{ color: "var(--fg-muted)", marginTop: 2 }}>{sub}</div>}
       </div>
-      <div style={{ flexShrink: 0 }}>{children}</div>
+      <div className="settings-row-action">{children}</div>
     </div>
   );
+}
+
+function ActionGroup({ children }: { children: React.ReactNode }) {
+  return <div className="settings-action-group">{children}</div>;
 }
 
 function Radio({ active, onClick }: { active: boolean; onClick: () => void }) {
