@@ -35,6 +35,7 @@ export interface Bud {
   last_progress_at: string | null;
   disappeared_at: string | null;
   created_at: string;
+  updated_at: string;
 }
 
 export interface BudHistory {

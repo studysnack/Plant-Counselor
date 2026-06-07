@@ -610,7 +610,6 @@ cp assets/sprites/* frontend/public/sprites/
 | 항목 | 현재 상태 | 개선 방향 |
 |------|-----------|-----------|
 | detail 시간 파싱 | 문자열 그대로 저장 | "오후 1시" → HH:MM 정규화 |
-| 봉우리 정렬 | 생성순 고정 | 마감순 / 진행률순 토글 |
 | 식물 통계 컬럼 | `plants.active_bud_count`/`harvested_count`/`rot_count` 미갱신(죽은 컬럼) | 상세 헤더는 봉우리에서 실시간 계산하도록 수정함. 컬럼 자체 제거 또는 트리거로 유지 검토 |
 | 되돌리기 영구화 | 현재 `/undo/last`는 서버 메모리 기반 | 장기 감사 로그가 필요하면 undo/action log 테이블 추가 |
 
@@ -626,6 +625,7 @@ cp assets/sprites/* frontend/public/sprites/
 > "PostgreSQL 연동"도 Supabase PostgreSQL(supabase-py PostgREST)로 완료됨.
 > 일반 일정의 날짜/시간/반복/색상, 데이터 JSON/CSV/ICS export, AI 변경 작업 미리보기
 > 승인 흐름, 최근 삭제/상태 변경 되돌리기는 이후 구현됨.
+> 식물 상세 봉우리 목록의 상태/진행률/마감일 필터와 최근 수정/마감/진행률/상태 정렬도 이후 구현됨.
 
 ---
 

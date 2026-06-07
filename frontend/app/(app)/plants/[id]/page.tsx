@@ -2,7 +2,7 @@
 
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { getPlant, listPlants, updatePlant, deletePlant, Plant } from "@/lib/api/plants";
 import { listBuds, getBud, patchBud, setBudProgress, deleteBud, moveBud, Bud } from "@/lib/api/buds";
 import { useChatStore } from "@/lib/store/chatStore";
@@ -516,6 +516,59 @@ function MetaCell({ label, value, accent }: { label: string; value: string; acce
 // ── Page ──────────────────────────────────────────────────────
 
 type Filter = "all" | "active" | "done";
+type StatusFilter = "all" | "active" | "bud" | "flower" | "fruit" | "wilting" | "harvested" | "rot";
+type ProgressFilter = "all" | "0-49" | "50-84" | "85-99" | "100";
+type DeadlineFilter = "all" | "overdue" | "today" | "week" | "none";
+type BudSort = "recent" | "deadline" | "progress_desc" | "progress_asc" | "status";
+
+function dateOnly(value: string | null | undefined): string {
+  return value ? String(value).slice(0, 10) : "";
+}
+
+function daysUntil(value: string | null | undefined): number | null {
+  const key = dateOnly(value);
+  if (!key) return null;
+  const target = new Date(`${key}T00:00:00`);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return Math.round((target.getTime() - today.getTime()) / 86_400_000);
+}
+
+function budActivityTime(bud: Bud): number {
+  return Date.parse(bud.updated_at ?? bud.last_progress_at ?? bud.created_at) || 0;
+}
+
+function matchesProgress(bud: Bud, filter: ProgressFilter): boolean {
+  if (filter === "all") return true;
+  if (filter === "100") return bud.progress >= 100;
+  if (filter === "0-49") return bud.progress < 50;
+  if (filter === "50-84") return bud.progress >= 50 && bud.progress < 85;
+  return bud.progress >= 85 && bud.progress < 100;
+}
+
+function matchesDeadline(bud: Bud, filter: DeadlineFilter): boolean {
+  if (filter === "all") return true;
+  const left = daysUntil(bud.deadline);
+  if (filter === "none") return left === null;
+  if (left === null) return false;
+  if (filter === "overdue") return left < 0;
+  if (filter === "today") return left === 0;
+  return left >= 0 && left <= 7;
+}
+
+function sortBuds(a: Bud, b: Bud, sort: BudSort): number {
+  if (sort === "recent") return budActivityTime(b) - budActivityTime(a);
+  if (sort === "progress_desc") return b.progress - a.progress || budActivityTime(b) - budActivityTime(a);
+  if (sort === "progress_asc") return a.progress - b.progress || budActivityTime(b) - budActivityTime(a);
+  if (sort === "deadline") {
+    const ad = a.deadline ? Date.parse(`${dateOnly(a.deadline)}T00:00:00`) : Number.POSITIVE_INFINITY;
+    const bd = b.deadline ? Date.parse(`${dateOnly(b.deadline)}T00:00:00`) : Number.POSITIVE_INFINITY;
+    return ad - bd || budActivityTime(b) - budActivityTime(a);
+  }
+  const statusRank = { wilting: 0, bud: 1, flower: 2, fruit: 3, harvested: 4, rot: 5 };
+  return (statusRank[normalizeBudStatus(a.status)] ?? 9) - (statusRank[normalizeBudStatus(b.status)] ?? 9)
+    || budActivityTime(b) - budActivityTime(a);
+}
 
 export default function PlantDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -543,6 +596,10 @@ export default function PlantDetailPage() {
   }, [scope.kind, scope.id, id, router]);
   const [selectedBudId, setSelectedBudId] = useState<string | null>(() => searchParams.get("bud"));
   const [filter, setFilter] = useState<Filter>("all");
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  const [progressFilter, setProgressFilter] = useState<ProgressFilter>("all");
+  const [deadlineFilter, setDeadlineFilter] = useState<DeadlineFilter>("all");
+  const [budSort, setBudSort] = useState<BudSort>("recent");
   const [confirming, setConfirming] = useState(false);
   const [editingPlant, setEditingPlant] = useState(false);
   const [plantNameDraft, setPlantNameDraft] = useState("");
@@ -587,12 +644,22 @@ export default function PlantDetailPage() {
     harvested: allBuds.filter((b) => b.status === "harvested").length,
     rot: allBuds.filter((b) => normalizeBudStatus(b.status) === "rot").length,
   };
-  const visible = allBuds.filter((b) => {
-    if (b.disappeared_at) return false;
-    if (filter === "active") return isActive(b.status);
-    if (filter === "done")   return isDone(b.status);
-    return true;
-  });
+  const visible = useMemo(() => allBuds
+    .filter((b) => {
+      if (b.disappeared_at) return false;
+      if (filter === "active" && !isActive(b.status)) return false;
+      if (filter === "done" && !isDone(b.status)) return false;
+      const status = normalizeBudStatus(b.status);
+      if (statusFilter === "active" && !isActive(b.status)) return false;
+      if (statusFilter !== "all" && statusFilter !== "active" && status !== statusFilter) return false;
+      if (!matchesProgress(b, progressFilter)) return false;
+      if (!matchesDeadline(b, deadlineFilter)) return false;
+      return true;
+    })
+    .sort((a, b) => sortBuds(a, b, budSort)),
+    [allBuds, filter, statusFilter, progressFilter, deadlineFilter, budSort]
+  );
+  const hasAdvancedFilter = statusFilter !== "all" || progressFilter !== "all" || deadlineFilter !== "all" || budSort !== "recent";
 
   async function handleDelete() {
     if (!id) return;
@@ -738,16 +805,90 @@ export default function PlantDetailPage() {
           </header>
 
           {/* Buds toolbar */}
-          <div className="animate-in" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
-            <h2 className="t-h1" style={{ color: "var(--fg)" }}>봉우리</h2>
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <FilterToggle current={filter} onChange={setFilter} />
-              <button
-                className="btn btn-primary btn-sm"
-                onClick={() => openWith({ kind: "plant", id: plant.id })}
-              >
-                + 봉우리 추가
-              </button>
+          <div className="animate-in" style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 14 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+              <div>
+                <h2 className="t-h1" style={{ color: "var(--fg)" }}>봉우리</h2>
+                <div className="t-caption" style={{ color: "var(--fg-muted)", marginTop: 2 }}>
+                  {visible.length}개 표시 · 전체 {allBuds.filter((b) => !b.disappeared_at).length}개
+                </div>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                <FilterToggle current={filter} onChange={setFilter} />
+                <button
+                  className="btn btn-primary btn-sm"
+                  onClick={() => openWith({ kind: "plant", id: plant.id })}
+                >
+                  + 봉우리 추가
+                </button>
+              </div>
+            </div>
+
+            <div className="card-flat" style={{ padding: 10, borderRadius: "var(--r-md)", display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end" }}>
+              <FilterSelect
+                label="상태"
+                value={statusFilter}
+                onChange={(value) => setStatusFilter(value as StatusFilter)}
+                options={[
+                  ["all", "전체 상태"],
+                  ["active", "진행 상태"],
+                  ["bud", "봉우리"],
+                  ["flower", "꽃"],
+                  ["fruit", "열매"],
+                  ["wilting", "시듦"],
+                  ["harvested", "수확"],
+                  ["rot", "포기"],
+                ]}
+              />
+              <FilterSelect
+                label="진행률"
+                value={progressFilter}
+                onChange={(value) => setProgressFilter(value as ProgressFilter)}
+                options={[
+                  ["all", "전체 진행률"],
+                  ["0-49", "0–49%"],
+                  ["50-84", "50–84%"],
+                  ["85-99", "85–99%"],
+                  ["100", "100%"],
+                ]}
+              />
+              <FilterSelect
+                label="마감일"
+                value={deadlineFilter}
+                onChange={(value) => setDeadlineFilter(value as DeadlineFilter)}
+                options={[
+                  ["all", "전체 마감"],
+                  ["overdue", "기한 지남"],
+                  ["today", "오늘"],
+                  ["week", "7일 이내"],
+                  ["none", "마감 없음"],
+                ]}
+              />
+              <FilterSelect
+                label="정렬"
+                value={budSort}
+                onChange={(value) => setBudSort(value as BudSort)}
+                options={[
+                  ["recent", "최근 수정순"],
+                  ["deadline", "마감 임박순"],
+                  ["progress_desc", "진행률 높은순"],
+                  ["progress_asc", "진행률 낮은순"],
+                  ["status", "상태순"],
+                ]}
+              />
+              {hasAdvancedFilter && (
+                <button
+                  className="btn btn-ghost btn-sm"
+                  onClick={() => {
+                    setStatusFilter("all");
+                    setProgressFilter("all");
+                    setDeadlineFilter("all");
+                    setBudSort("recent");
+                  }}
+                >
+                  초기화
+                </button>
+              )}
             </div>
           </div>
 
@@ -758,7 +899,7 @@ export default function PlantDetailPage() {
           ) : visible.length === 0 ? (
             <div className="card" style={{ padding: 32, textAlign: "center", background: "var(--bg-subtle)" }}>
               <p className="t-body-sm" style={{ color: "var(--fg-muted)" }}>
-                {filter === "all" ? "봉우리가 없습니다. AI에게 추가를 요청하세요." : "조건에 맞는 봉우리가 없습니다."}
+                {filter === "all" && !hasAdvancedFilter ? "봉우리가 없습니다. AI에게 추가를 요청하세요." : "조건에 맞는 봉우리가 없습니다."}
               </p>
             </div>
           ) : (
@@ -796,6 +937,34 @@ function BigStat({ label, value, color = "var(--fg)" }: { label: string; value: 
       <div className="t-h1" style={{ color, fontVariantNumeric: "tabular-nums" }}>{value}</div>
       <div className="t-caption" style={{ color: "var(--fg-muted)", marginTop: 2 }}>{label}</div>
     </div>
+  );
+}
+
+function FilterSelect({
+  label,
+  value,
+  onChange,
+  options,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  options: [string, string][];
+}) {
+  return (
+    <label style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 118 }}>
+      <span className="t-caption" style={{ color: "var(--fg-muted)" }}>{label}</span>
+      <select
+        className="input"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        style={{ height: 34, fontSize: 12.5, padding: "0 28px 0 10px" }}
+      >
+        {options.map(([optionValue, optionLabel]) => (
+          <option key={optionValue} value={optionValue}>{optionLabel}</option>
+        ))}
+      </select>
+    </label>
   );
 }
 
