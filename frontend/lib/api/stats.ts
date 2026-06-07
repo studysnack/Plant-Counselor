@@ -52,10 +52,19 @@ export interface CalendarEvent {
   repeat_rule: CalendarEventRepeatRule;
   plant_id: string | null;
   color: CalendarEventColor;
+  conflicts?: CalendarConflict[];
 }
 
 export type CalendarEventColor = "olive" | "blue" | "yellow" | "red" | "pink" | "purple";
 export type CalendarEventRepeatRule = "none" | "daily" | "weekly" | "monthly" | "yearly";
+export interface CalendarConflict {
+  event_id: string;
+  title: string;
+  date: string;
+  time: string;
+  end_time: string;
+  repeat_rule: CalendarEventRepeatRule;
+}
 
 export const createCalendarEvent = (body: {
   title: string;

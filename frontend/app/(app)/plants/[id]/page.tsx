@@ -517,7 +517,6 @@ function MetaCell({ label, value, accent }: { label: string; value: string; acce
 
 type Filter = "all" | "active" | "done";
 type StatusFilter = "all" | "active" | "bud" | "flower" | "fruit" | "wilting" | "harvested" | "rot";
-type ProgressFilter = "all" | "0-49" | "50-84" | "85-99" | "100";
 type DeadlineFilter = "all" | "overdue" | "today" | "week" | "none";
 type BudSort = "recent" | "deadline" | "progress_desc" | "progress_asc" | "status";
 
@@ -538,12 +537,25 @@ function budActivityTime(bud: Bud): number {
   return Date.parse(bud.updated_at ?? bud.last_progress_at ?? bud.created_at) || 0;
 }
 
-function matchesProgress(bud: Bud, filter: ProgressFilter): boolean {
-  if (filter === "all") return true;
-  if (filter === "100") return bud.progress >= 100;
-  if (filter === "0-49") return bud.progress < 50;
-  if (filter === "50-84") return bud.progress >= 50 && bud.progress < 85;
-  return bud.progress >= 85 && bud.progress < 100;
+function parseProgressBound(value: string): number | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const parsed = Number(trimmed);
+  if (!Number.isFinite(parsed)) return null;
+  return Math.max(0, Math.min(100, Math.round(parsed)));
+}
+
+function normalizeProgressInput(value: string): string {
+  const parsed = parseProgressBound(value);
+  return parsed === null ? "" : String(parsed);
+}
+
+function matchesProgressRange(bud: Bud, minRaw: string, maxRaw: string): boolean {
+  const min = parseProgressBound(minRaw);
+  const max = parseProgressBound(maxRaw);
+  const lower = min ?? 0;
+  const upper = max ?? 100;
+  return bud.progress >= Math.min(lower, upper) && bud.progress <= Math.max(lower, upper);
 }
 
 function matchesDeadline(bud: Bud, filter: DeadlineFilter): boolean {
@@ -597,7 +609,8 @@ export default function PlantDetailPage() {
   const [selectedBudId, setSelectedBudId] = useState<string | null>(() => searchParams.get("bud"));
   const [filter, setFilter] = useState<Filter>("all");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
-  const [progressFilter, setProgressFilter] = useState<ProgressFilter>("all");
+  const [progressMin, setProgressMin] = useState("");
+  const [progressMax, setProgressMax] = useState("");
   const [deadlineFilter, setDeadlineFilter] = useState<DeadlineFilter>("all");
   const [budSort, setBudSort] = useState<BudSort>("recent");
   const [confirming, setConfirming] = useState(false);
@@ -652,14 +665,18 @@ export default function PlantDetailPage() {
       const status = normalizeBudStatus(b.status);
       if (statusFilter === "active" && !isActive(b.status)) return false;
       if (statusFilter !== "all" && statusFilter !== "active" && status !== statusFilter) return false;
-      if (!matchesProgress(b, progressFilter)) return false;
+      if (!matchesProgressRange(b, progressMin, progressMax)) return false;
       if (!matchesDeadline(b, deadlineFilter)) return false;
       return true;
     })
     .sort((a, b) => sortBuds(a, b, budSort)),
-    [allBuds, filter, statusFilter, progressFilter, deadlineFilter, budSort]
+    [allBuds, filter, statusFilter, progressMin, progressMax, deadlineFilter, budSort]
   );
-  const hasAdvancedFilter = statusFilter !== "all" || progressFilter !== "all" || deadlineFilter !== "all" || budSort !== "recent";
+  const hasAdvancedFilter = statusFilter !== "all"
+    || progressMin.trim() !== ""
+    || progressMax.trim() !== ""
+    || deadlineFilter !== "all"
+    || budSort !== "recent";
 
   async function handleDelete() {
     if (!id) return;
@@ -840,17 +857,11 @@ export default function PlantDetailPage() {
                   ["rot", "포기"],
                 ]}
               />
-              <FilterSelect
-                label="진행률"
-                value={progressFilter}
-                onChange={(value) => setProgressFilter(value as ProgressFilter)}
-                options={[
-                  ["all", "전체 진행률"],
-                  ["0-49", "0–49%"],
-                  ["50-84", "50–84%"],
-                  ["85-99", "85–99%"],
-                  ["100", "100%"],
-                ]}
+              <ProgressRangeFilter
+                min={progressMin}
+                max={progressMax}
+                onMinChange={setProgressMin}
+                onMaxChange={setProgressMax}
               />
               <FilterSelect
                 label="마감일"
@@ -881,7 +892,8 @@ export default function PlantDetailPage() {
                   className="btn btn-ghost btn-sm"
                   onClick={() => {
                     setStatusFilter("all");
-                    setProgressFilter("all");
+                    setProgressMin("");
+                    setProgressMax("");
                     setDeadlineFilter("all");
                     setBudSort("recent");
                   }}
@@ -965,6 +977,53 @@ function FilterSelect({
         ))}
       </select>
     </label>
+  );
+}
+
+function ProgressRangeFilter({
+  min,
+  max,
+  onMinChange,
+  onMaxChange,
+}: {
+  min: string;
+  max: string;
+  onMinChange: (value: string) => void;
+  onMaxChange: (value: string) => void;
+}) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 152 }}>
+      <span className="t-caption" style={{ color: "var(--fg-muted)" }}>진행률</span>
+      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <input
+          className="input"
+          type="number"
+          inputMode="numeric"
+          min={0}
+          max={100}
+          value={min}
+          onChange={(event) => onMinChange(event.target.value)}
+          onBlur={() => onMinChange(normalizeProgressInput(min))}
+          placeholder="최소"
+          aria-label="진행률 최소값"
+          style={{ height: 34, width: 68, fontSize: 12.5, padding: "0 8px" }}
+        />
+        <span className="t-caption" style={{ color: "var(--fg-muted)" }}>~</span>
+        <input
+          className="input"
+          type="number"
+          inputMode="numeric"
+          min={0}
+          max={100}
+          value={max}
+          onChange={(event) => onMaxChange(event.target.value)}
+          onBlur={() => onMaxChange(normalizeProgressInput(max))}
+          placeholder="최대"
+          aria-label="진행률 최대값"
+          style={{ height: 34, width: 68, fontSize: 12.5, padding: "0 8px" }}
+        />
+      </div>
+    </div>
   );
 }
 

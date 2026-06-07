@@ -154,11 +154,23 @@ export default function SettingsPage() {
 
               <SubSection title="데이터 내보내기">
                 <Row label="개인 데이터" sub="식물, 봉우리, 일정, 대화 기록을 파일로 저장합니다">
-                  <ActionGroup>
-                    <button className="btn btn-secondary btn-sm" onClick={() => handleExport("json")}>JSON</button>
-                    <button className="btn btn-secondary btn-sm" onClick={() => handleExport("csv")}>CSV</button>
-                    <button className="btn btn-secondary btn-sm" onClick={() => handleExport("ics")}>ICS</button>
-                  </ActionGroup>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8, width: "100%" }}>
+                    <ExportButton
+                      title="전체 백업 JSON"
+                      desc="식물, 봉우리, 일반 일정, 대화 기록, 알림을 구조화된 백업 파일로 저장"
+                      onClick={() => handleExport("json")}
+                    />
+                    <ExportButton
+                      title="표 계산용 CSV"
+                      desc="식물, 봉우리, 일반 일정, 대화 기록, 알림을 스프레드시트용 표 형식으로 저장"
+                      onClick={() => handleExport("csv")}
+                    />
+                    <ExportButton
+                      title="캘린더 ICS"
+                      desc="일반 일정만 Apple/Google 캘린더에 가져올 수 있는 형식으로 저장"
+                      onClick={() => handleExport("ics")}
+                    />
+                  </div>
                 </Row>
               </SubSection>
 
@@ -289,6 +301,39 @@ function Row({ label, sub, children }: { label: string; sub?: string; children: 
 
 function ActionGroup({ children }: { children: React.ReactNode }) {
   return <div className="settings-action-group">{children}</div>;
+}
+
+function ExportButton({ title, desc, onClick }: { title: string; desc: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="card-flat"
+      style={{
+        width: "100%",
+        padding: "10px 12px",
+        borderRadius: "var(--r-md)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: 12,
+        textAlign: "left",
+        cursor: "pointer",
+      }}
+    >
+      <span style={{ minWidth: 0 }}>
+        <span className="t-body-sm" style={{ color: "var(--fg)", fontWeight: 600, display: "block" }}>
+          {title}
+        </span>
+        <span className="t-caption" style={{ color: "var(--fg-muted)", display: "block", marginTop: 2, lineHeight: 1.45 }}>
+          {desc}
+        </span>
+      </span>
+      <span className="btn btn-secondary btn-sm" style={{ pointerEvents: "none", flexShrink: 0 }}>
+        내보내기
+      </span>
+    </button>
+  );
 }
 
 function Radio({ active, onClick }: { active: boolean; onClick: () => void }) {

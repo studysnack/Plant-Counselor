@@ -21,6 +21,14 @@ type SystemKind = "plants_list" | "skills_list" | "cmd_result" | "action_preview
 interface PendingAction {
   name: string;
   args: Record<string, unknown>;
+  conflicts?: {
+    event_id: string;
+    title: string;
+    date: string;
+    time: string;
+    end_time: string;
+    repeat_rule?: string;
+  }[];
 }
 
 interface Message {
@@ -839,6 +847,18 @@ export default function ChatPanel() {
                             <code className="t-mono" style={{ display: "block", marginTop: 4, color: "var(--fg-muted)", fontSize: 11, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
                               {JSON.stringify(action.args, null, 2)}
                             </code>
+                            {action.conflicts && action.conflicts.length > 0 && (
+                              <div style={{ marginTop: 8, padding: "7px 8px", borderRadius: "var(--r-sm)", background: "color-mix(in srgb, var(--warning) 12%, transparent)", border: "1px solid color-mix(in srgb, var(--warning) 28%, transparent)" }}>
+                                <div className="t-caption" style={{ color: "var(--warning)", fontWeight: 700, marginBottom: 4 }}>
+                                  겹치는 일정 {action.conflicts.length}개
+                                </div>
+                                {action.conflicts.slice(0, 3).map((conflict) => (
+                                  <div key={`${conflict.event_id}-${conflict.date}`} className="t-caption" style={{ color: "var(--fg-secondary)", lineHeight: 1.45 }}>
+                                    {conflict.date} {conflict.time}–{conflict.end_time} · {conflict.title}
+                                  </div>
+                                ))}
+                              </div>
+                            )}
                           </div>
                         ))}
                       </div>

@@ -199,19 +199,8 @@ def _parse_date(s: str) -> date:
         raise HTTPException(400, "날짜 형식이 올바르지 않습니다. (YYYY-MM-DD)")
 
 
-@router.post("/calendar/events")
-def create_calendar_event(body: CalendarEventCreate, user=Depends(require_user), db: Client = Depends(get_db)):
-    if not body.title.strip():
-        raise HTTPException(400, "일정 제목을 입력해주세요.")
-    try:
-        ev = CalendarService(db).create(
-            user.id, body.plant_id, body.title.strip(), body.detail, _parse_date(body.date),
-            body.time, _parse_date(body.end_date) if body.end_date else None,
-            body.end_time, body.all_day, body.repeat_rule, body.color
-        )
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    return {"ok": True, "data": {
+def _calendar_event_out(ev, conflicts: list[dict] | None = None) -> dict:
+    return {
         "id": ev.id, "title": ev.title, "detail": ev.detail,
         "date": str(ev.event_date)[:10],
         "end_date": str(getattr(ev, "end_date", ev.event_date))[:10],
@@ -220,7 +209,30 @@ def create_calendar_event(body: CalendarEventCreate, user=Depends(require_user),
         "all_day": bool(getattr(ev, "all_day", True)),
         "repeat_rule": getattr(ev, "repeat_rule", "none") or "none",
         "plant_id": ev.plant_id, "color": ev.color,
-    }}
+        "conflicts": conflicts or [],
+    }
+
+
+@router.post("/calendar/events")
+def create_calendar_event(body: CalendarEventCreate, user=Depends(require_user), db: Client = Depends(get_db)):
+    if not body.title.strip():
+        raise HTTPException(400, "일정 제목을 입력해주세요.")
+    svc = CalendarService(db)
+    try:
+        start = _parse_date(body.date)
+        end = _parse_date(body.end_date) if body.end_date else None
+        conflicts = svc.detect_conflicts(
+            user.id, start, body.time, end, body.end_time,
+            body.all_day, body.repeat_rule,
+        )
+        ev = svc.create(
+            user.id, body.plant_id, body.title.strip(), body.detail, _parse_date(body.date),
+            body.time, _parse_date(body.end_date) if body.end_date else None,
+            body.end_time, body.all_day, body.repeat_rule, body.color
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True, "data": _calendar_event_out(ev, conflicts)}
 
 
 @router.patch("/calendar/events/{event_id}")
@@ -246,22 +258,31 @@ def update_calendar_event(event_id: str, body: CalendarEventUpdate, user=Depends
         fields["repeat_rule"] = body.repeat_rule
     if body.color is not None:
         fields["color"] = body.color
+    svc = CalendarService(db)
+    current = CalendarEventRepository(db).get(user.id, event_id)
+    if current is None:
+        raise HTTPException(404, "일정을 찾을 수 없습니다.")
     try:
-        ev = CalendarService(db).update(user.id, event_id, fields)
+        start = fields.get("event_date") or _parse_date(str(current.event_date)[:10])
+        end = fields.get("end_date") or _parse_date(str(getattr(current, "end_date", current.event_date))[:10])
+        all_day = fields.get("all_day") if "all_day" in fields else bool(getattr(current, "all_day", True))
+        event_time = fields.get("event_time") if "event_time" in fields else (
+            str(getattr(current, "event_time", ""))[:5] if getattr(current, "event_time", None) else None
+        )
+        end_time = fields.get("end_time") if "end_time" in fields else (
+            str(getattr(current, "end_time", ""))[:5] if getattr(current, "end_time", None) else None
+        )
+        repeat_rule = fields.get("repeat_rule") or getattr(current, "repeat_rule", "none") or "none"
+        conflicts = svc.detect_conflicts(
+            user.id, start, event_time, end, end_time, bool(all_day), repeat_rule,
+            exclude_event_id=event_id,
+        )
+        ev = svc.update(user.id, event_id, fields)
     except ValueError as e:
         message = str(e)
         status = 404 if "찾을 수 없습니다" in message else 400
         raise HTTPException(status, message)
-    return {"ok": True, "data": {
-        "id": ev.id, "title": ev.title, "detail": ev.detail,
-        "date": str(ev.event_date)[:10],
-        "end_date": str(getattr(ev, "end_date", ev.event_date))[:10],
-        "time": str(getattr(ev, "event_time", ""))[:5] if getattr(ev, "event_time", None) else None,
-        "end_time": str(getattr(ev, "end_time", ""))[:5] if getattr(ev, "end_time", None) else None,
-        "all_day": bool(getattr(ev, "all_day", True)),
-        "repeat_rule": getattr(ev, "repeat_rule", "none") or "none",
-        "plant_id": ev.plant_id, "color": ev.color,
-    }}
+    return {"ok": True, "data": _calendar_event_out(ev, conflicts)}
 
 
 @router.delete("/calendar/events/{event_id}")

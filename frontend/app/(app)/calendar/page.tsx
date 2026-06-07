@@ -563,7 +563,18 @@ function EventModal({
       ? await updateCalendarEvent(event.id, body)
       : await createCalendarEvent(body);
     setSaving(false);
-    if (r.ok) onSaved();
+    if (r.ok) {
+      if (r.data.conflicts && r.data.conflicts.length > 0) {
+        window.alert(
+          `겹치는 일정 ${r.data.conflicts.length}개가 있습니다.\n` +
+          r.data.conflicts
+            .slice(0, 4)
+            .map((conflict) => `- ${conflict.date} ${conflict.time}–${conflict.end_time} ${conflict.title}`)
+            .join("\n")
+        );
+      }
+      onSaved();
+    }
     else setErr(r.error.message || `일정 ${editing ? "수정" : "추가"}에 실패했습니다.`);
   }
 
