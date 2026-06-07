@@ -6,6 +6,7 @@ from app.deps import get_db, require_user
 from app.repositories.bud_repo import BudRepository
 from app.schemas.bud import BudHistoryOut, BudMoveRequest, BudOut, BudPatch, BudProgressUpdate
 from app.services.bud_service import BudService
+from app import undo_store
 
 router = APIRouter(prefix="/buds", tags=["buds"])
 
@@ -53,7 +54,9 @@ def move_bud(bud_id: str, body: BudMoveRequest, user=Depends(require_user), db: 
 @router.delete("/{bud_id}")
 def delete_bud(bud_id: str, user=Depends(require_user), db: Client = Depends(get_db)):
     try:
+        bud = BudService(db).get(user.id, bud_id)
         BudService(db).delete(user.id, bud_id)
+        undo_store.push(user.id, "bud_restore", f"봉우리 '{bud.title}' 삭제", vars(bud))
     except ValueError as exc:
         raise HTTPException(404, str(exc)) from exc
     return {"ok": True, "data": {"deleted_id": bud_id}}

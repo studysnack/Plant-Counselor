@@ -7,6 +7,7 @@ import { useAuthStore } from "@/lib/store/authStore";
 import { useThemeStore, ThemeMode } from "@/lib/store/themeStore";
 import { supabase } from "@/lib/supabase";
 import { apiPatch, apiDelete } from "@/lib/api/client";
+import { exportUserData } from "@/lib/api/stats";
 import type { UserProfile } from "@/lib/store/authStore";
 
 const TABS = [
@@ -89,6 +90,11 @@ export default function SettingsPage() {
     router.replace("/login");
   }
 
+  async function handleExport(format: "json" | "csv" | "ics") {
+    const result = await exportUserData(format);
+    notify(result.ok ? "내보내기를 시작했습니다." : result.error ?? "내보내기 실패", result.ok);
+  }
+
   return (
     <div className="app-page app-page-narrow">
       <header style={{ marginBottom: 24 }}>
@@ -143,6 +149,16 @@ export default function SettingsPage() {
               <SubSection title="세션">
                 <Row label="로그아웃" sub="현재 세션을 종료합니다">
                   <button className="btn btn-danger btn-sm" onClick={handleLogout}>로그아웃</button>
+                </Row>
+              </SubSection>
+
+              <SubSection title="데이터 내보내기">
+                <Row label="개인 데이터" sub="식물, 봉우리, 일정, 대화 기록을 파일로 저장합니다">
+                  <ActionGroup>
+                    <button className="btn btn-secondary btn-sm" onClick={() => handleExport("json")}>JSON</button>
+                    <button className="btn btn-secondary btn-sm" onClick={() => handleExport("csv")}>CSV</button>
+                    <button className="btn btn-secondary btn-sm" onClick={() => handleExport("ics")}>ICS</button>
+                  </ActionGroup>
                 </Row>
               </SubSection>
 

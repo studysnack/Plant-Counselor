@@ -1,6 +1,7 @@
 from __future__ import annotations
 from app.ai.permissions import guard_bud
 from app.ai.skill_base import SkillBase, SkillResult, SkillContext
+from app import undo_store
 
 
 class AbandonBudSkill(SkillBase):
@@ -19,9 +20,10 @@ class AbandonBudSkill(SkillBase):
     }
 
     def run(self, args: dict, ctx: SkillContext) -> SkillResult:
-        _, err = guard_bud(ctx, args["bud_id"])
+        bud, err = guard_bud(ctx, args["bud_id"])
         if err:
             return err
+        undo_store.push(ctx.user_id, "bud_status_restore", f"봉우리 '{bud.title}' 포기", vars(bud))
         ctx.bud_service.abandon(
             ctx.user_id, args["bud_id"], args.get("reason", "user:포기")
         )

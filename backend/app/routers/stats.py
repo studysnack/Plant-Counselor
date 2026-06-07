@@ -1,8 +1,12 @@
 """Statistics, briefing, and calendar endpoints."""
 from __future__ import annotations
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+import csv
+import io
+import json
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import Response
 from pydantic import BaseModel
 from supabase import Client
 
@@ -12,6 +16,9 @@ from app.services.bud_service import BudService
 from app.services.calendar_service import CalendarService
 from app.services.garden_state_service import GardenStateService
 from app.services.plant_service import PlantService
+from app.repositories.bud_repo import BudRepository
+from app.repositories.calendar_event_repo import CalendarEventRepository
+from app import undo_store
 
 router = APIRouter(tags=["stats"])
 
@@ -259,7 +266,110 @@ def update_calendar_event(event_id: str, body: CalendarEventUpdate, user=Depends
 
 @router.delete("/calendar/events/{event_id}")
 def delete_calendar_event(event_id: str, user=Depends(require_user), db: Client = Depends(get_db)):
+    repo = CalendarEventRepository(db)
+    snapshot = repo.get(user.id, event_id)
     ok = CalendarService(db).delete(user.id, event_id)
     if not ok:
         raise HTTPException(404, "일정을 찾을 수 없습니다.")
+    if snapshot is not None:
+        undo_store.push(user.id, "calendar_event_restore", f"일정 '{snapshot.title}' 삭제", vars(snapshot))
     return {"ok": True, "data": {"deleted_id": event_id}}
+
+
+@router.post("/undo/last")
+def undo_last(action_id: str | None = None, user=Depends(require_user), db: Client = Depends(get_db)):
+    action = undo_store.pop(user.id, action_id)
+    if action is None:
+        raise HTTPException(404, "되돌릴 작업이 없습니다.")
+    if action.kind == "calendar_event_restore":
+        restored = CalendarEventRepository(db).restore(action.payload)
+        return {"ok": True, "data": {"kind": action.kind, "label": action.label, "id": restored.id}}
+    if action.kind == "bud_restore":
+        restored = BudRepository(db).restore(action.payload)
+        return {"ok": True, "data": {"kind": action.kind, "label": action.label, "id": restored.id}}
+    if action.kind == "bud_status_restore":
+        bud_id = action.payload["id"]
+        fields = {
+            "status": action.payload["status"],
+            "progress": action.payload.get("progress", 0),
+            "last_progress_at": action.payload.get("last_progress_at"),
+        }
+        restored = BudRepository(db).update(user.id, bud_id, fields)
+        if restored is None:
+            raise HTTPException(404, "되돌릴 봉우리를 찾을 수 없습니다.")
+        return {"ok": True, "data": {"kind": action.kind, "label": action.label, "id": restored.id}}
+    raise HTTPException(400, "지원하지 않는 되돌리기 작업입니다.")
+
+
+def _rows_as_csv(rows: list[dict]) -> str:
+    out = io.StringIO()
+    keys = sorted({key for row in rows for key in row.keys()})
+    writer = csv.DictWriter(out, fieldnames=keys)
+    writer.writeheader()
+    writer.writerows(rows)
+    return out.getvalue()
+
+
+def _collect_export_data(user_id: str, db: Client) -> dict:
+    plant_rows = db.table("plants").select("*").eq("user_id", user_id).execute().data or []
+    bud_rows = db.table("buds").select("*").eq("user_id", user_id).execute().data or []
+    conversation_rows = db.table("conversations").select("*").eq("user_id", user_id).execute().data or []
+    notification_rows = db.table("notifications").select("*").eq("user_id", user_id).execute().data or []
+    today = date.today()
+    calendar_rows = [vars(ev) for ev in CalendarService(db).list_range(user_id, date(1970, 1, 1), date(today.year + 20, 12, 31))]
+    return {
+        "exported_at": datetime.utcnow().isoformat() + "Z",
+        "plants": plant_rows,
+        "buds": bud_rows,
+        "calendar_events": calendar_rows,
+        "conversations": conversation_rows,
+        "notifications": notification_rows,
+    }
+
+
+@router.get("/export/json")
+def export_json(user=Depends(require_user), db: Client = Depends(get_db)):
+    payload = json.dumps(_collect_export_data(user.id, db), ensure_ascii=False, default=str, indent=2)
+    return Response(payload, media_type="application/json", headers={"Content-Disposition": "attachment; filename=plant-counselor-export.json"})
+
+
+@router.get("/export/csv")
+def export_csv(user=Depends(require_user), db: Client = Depends(get_db)):
+    data = _collect_export_data(user.id, db)
+    parts = []
+    for key in ("plants", "buds", "calendar_events", "conversations", "notifications"):
+        parts.append(f"# {key}\n{_rows_as_csv(data[key])}")
+    return Response("\n\n".join(parts), media_type="text/csv; charset=utf-8", headers={"Content-Disposition": "attachment; filename=plant-counselor-export.csv"})
+
+
+def _ics_dt(day: str, time_value: str | None, all_day: bool) -> str:
+    if all_day or not time_value:
+        return str(day).replace("-", "")
+    return f"{str(day).replace('-', '')}T{time_value.replace(':', '')}00"
+
+
+def _ics_date_plus_one(day: str) -> str:
+    return (date.fromisoformat(str(day)[:10]) + timedelta(days=1)).isoformat()
+
+
+@router.get("/export/ics")
+def export_ics(user=Depends(require_user), db: Client = Depends(get_db)):
+    events = CalendarService(db).list_range(user.id, date(1970, 1, 1), date(date.today().year + 20, 12, 31))
+    lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Plant Counselor//Calendar Export//KO"]
+    for ev in events:
+        all_day = bool(getattr(ev, "all_day", True))
+        start = str(ev.event_date)[:10]
+        end = str(getattr(ev, "end_date", ev.event_date))[:10]
+        start_time = str(getattr(ev, "event_time", ""))[:5] if getattr(ev, "event_time", None) else None
+        end_time = str(getattr(ev, "end_time", ""))[:5] if getattr(ev, "end_time", None) else None
+        lines.extend([
+            "BEGIN:VEVENT",
+            f"UID:{ev.id}@plant-counselor",
+            f"SUMMARY:{str(ev.title).replace(chr(10), ' ')}",
+            f"DESCRIPTION:{str(getattr(ev, 'detail', '') or '').replace(chr(10), ' ')}",
+            f"DTSTART{';VALUE=DATE' if all_day else ''}:{_ics_dt(start, start_time, all_day)}",
+            f"DTEND{';VALUE=DATE' if all_day else ''}:{_ics_dt(_ics_date_plus_one(end) if all_day else end, end_time, all_day)}",
+            "END:VEVENT",
+        ])
+    lines.append("END:VCALENDAR")
+    return Response("\r\n".join(lines), media_type="text/calendar; charset=utf-8", headers={"Content-Disposition": "attachment; filename=plant-counselor-calendar.ics"})

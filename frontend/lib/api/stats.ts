@@ -1,4 +1,4 @@
-import { apiGet, apiPost, apiPatch, apiDelete } from "./client";
+import { apiGet, apiPost, apiPatch, apiDelete, downloadFile } from "./client";
 
 export interface SummaryStats {
   active_concerns: number;
@@ -88,3 +88,12 @@ export const updateCalendarEvent = (
 
 export const deleteCalendarEvent = (id: string) =>
   apiDelete<{ deleted_id: string }>(`/calendar/events/${id}`);
+
+export const undoLastAction = () =>
+  apiPost<{ kind: string; label: string; id: string }>("/undo/last");
+
+export const exportUserData = (format: "json" | "csv" | "ics") =>
+  downloadFile(
+    `/export/${format}`,
+    format === "ics" ? "plant-counselor-calendar.ics" : `plant-counselor-export.${format}`
+  );

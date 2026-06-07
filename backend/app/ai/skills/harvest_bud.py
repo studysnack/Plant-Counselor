@@ -1,6 +1,7 @@
 from __future__ import annotations
 from app.ai.permissions import guard_bud
 from app.ai.skill_base import SkillBase, SkillResult, SkillContext
+from app import undo_store
 
 
 class HarvestBudSkill(SkillBase):
@@ -16,10 +17,11 @@ class HarvestBudSkill(SkillBase):
     }
 
     def run(self, args: dict, ctx: SkillContext) -> SkillResult:
-        _, err = guard_bud(ctx, args["bud_id"])
+        bud, err = guard_bud(ctx, args["bud_id"])
         if err:
             return err
         try:
+            undo_store.push(ctx.user_id, "bud_status_restore", f"봉우리 '{bud.title}' 수확", vars(bud))
             ctx.bud_service.harvest(ctx.user_id, args["bud_id"], args.get("note", ""))
         except ValueError as exc:
             return SkillResult(

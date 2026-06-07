@@ -6,6 +6,11 @@ from app.ai.skill_base import SkillContext
 import app.runtime_settings as rs
 
 MAX_STEPS = 10  # fallback; actual value read from runtime_settings each run
+MUTATING_SKILLS = {
+    "create_plant", "delete_plant", "create_bud", "update_bud_status",
+    "update_bud_progress", "set_deadline", "abandon_bud", "harvest_bud",
+    "create_calendar_event", "update_calendar_event", "delete_calendar_event",
+}
 
 
 class ChatOrchestrator:
@@ -35,6 +40,7 @@ class ChatOrchestrator:
         current_screen: str,
         db,
         tone: str = "counselor",
+        require_confirmation: bool = True,
     ):
         """동기 제너레이터: SSE 이벤트 문자열을 yield합니다."""
         rec = LogRecorder(user_id, text)
@@ -138,6 +144,25 @@ class ChatOrchestrator:
 
             if tool_use:
                 last_tool_use = tool_use
+                if require_confirmation and tool_use["name"] in MUTATING_SKILLS:
+                    rec.log_event(
+                        f"confirmation_required_{step + 1}",
+                        f"{tool_use['name']} args={tool_use['input']}",
+                    )
+                    yield (
+                        "event: confirmation_required\ndata: "
+                        f"{json.dumps({'actions': [{'name': tool_use['name'], 'args': tool_use['input']}], 'message': 'AI가 데이터를 변경하려고 합니다. 실행 전에 확인해주세요.'}, ensure_ascii=False)}\n\n"
+                    )
+                    rec.set_final("작업 실행 전 확인이 필요합니다.")
+                    if conv_svc:
+                        conv_svc.append(
+                            user_id, scope, scope_id, "assistant",
+                            "작업 실행 전 확인이 필요합니다.",
+                            skill_call={"name": tool_use["name"], "input": tool_use["input"], "pending_confirmation": True},
+                        )
+                    rec.save(db)
+                    yield "event: done\ndata: {}\n\n"
+                    return
                 yield f"event: tool_call\ndata: {json.dumps({'name': tool_use['name'], 'args': tool_use['input']})}\n\n"
 
                 skill_result = self.registry.dispatch(tool_use["name"], tool_use["input"], ctx)

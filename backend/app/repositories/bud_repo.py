@@ -104,6 +104,16 @@ class BudRepository:
         )
         return bool(res.data)
 
+    def restore(self, row: dict) -> SimpleNamespace:
+        allowed = {
+            "id", "user_id", "plant_id", "title", "detail", "type", "status",
+            "progress", "deadline", "last_progress_at", "disappeared_at",
+            "created_at", "updated_at",
+        }
+        safe = {k: v for k, v in row.items() if k in allowed}
+        res = self.db.table("buds").insert(safe).execute()
+        return _row(res.data[0])
+
     def add_history(
         self,
         bud_id: str,

@@ -116,7 +116,14 @@ export async function downloadFile(path: string, suggestedName: string): Promise
 }
 
 export function streamChat(
-  payload: { text: string; scope?: string; scope_id?: string; current_screen?: string },
+  payload: {
+    text: string;
+    scope?: string;
+    scope_id?: string;
+    current_screen?: string;
+    require_confirmation?: boolean;
+    confirmed_actions?: { name: string; args: Record<string, unknown> }[];
+  },
   callbacks: {
     onStart?: (id: string) => void;
     onToken?: (text: string) => void;
