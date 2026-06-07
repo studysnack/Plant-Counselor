@@ -125,12 +125,16 @@ def get_calendar(
         start = _parse_event_date(ev.event_date)
         end = _parse_event_date(getattr(ev, "end_date", ev.event_date))
         duration_days = _event_duration_days(start, end)
+        seen_days: set[str] = set()
         for occurrence_start in _occurrence_starts(ev, d_from, d_to):
             for offset in range(duration_days + 1):
                 occurrence_day = occurrence_start + timedelta(days=offset)
                 if occurrence_day < d_from or occurrence_day > d_to:
                     continue
                 key = occurrence_day.isoformat()
+                if key in seen_days:
+                    continue
+                seen_days.add(key)
                 events.setdefault(key, []).append({
                     "id": ev.id,
                     "title": ev.title,
