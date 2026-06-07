@@ -76,6 +76,24 @@ class UpdateCalendarEventSkill(SkillBase):
             return SkillResult(ok=False, message="수정할 내용이 없습니다.", error_code="no_fields")
 
         try:
+            current = ctx.calendar_service._repo.get(ctx.user_id, args["event_id"])
+            if current is None:
+                return SkillResult(ok=False, message="일정을 찾을 수 없습니다.", error_code="not_found")
+            from datetime import date
+            start = fields.get("event_date") or date.fromisoformat(str(current.event_date)[:10])
+            end = fields.get("end_date") or date.fromisoformat(str(getattr(current, "end_date", current.event_date))[:10])
+            all_day = fields.get("all_day") if "all_day" in fields else bool(getattr(current, "all_day", True))
+            event_time = fields.get("event_time") if "event_time" in fields else (
+                str(getattr(current, "event_time", ""))[:5] if getattr(current, "event_time", None) else None
+            )
+            end_time = fields.get("end_time") if "end_time" in fields else (
+                str(getattr(current, "end_time", ""))[:5] if getattr(current, "end_time", None) else None
+            )
+            repeat_rule = fields.get("repeat_rule") or getattr(current, "repeat_rule", "none") or "none"
+            conflicts = ctx.calendar_service.detect_conflicts(
+                ctx.user_id, start, event_time, end, end_time, bool(all_day), repeat_rule,
+                exclude_event_id=args["event_id"],
+            )
             ev = ctx.calendar_service.update(ctx.user_id, args["event_id"], fields)
         except ValueError as e:
             message = str(e)
@@ -83,6 +101,9 @@ class UpdateCalendarEventSkill(SkillBase):
             return SkillResult(ok=False, message=message, error_code=code)
         return SkillResult(
             ok=True,
-            message=f"일정 '{ev.title}'을(를) 수정했습니다.",
-            data={"event_id": ev.id},
+            message=(
+                f"일정 '{ev.title}'을(를) 수정했습니다."
+                + (f" 겹치는 일정 {len(conflicts)}개가 있습니다." if conflicts else "")
+            ),
+            data={"event_id": ev.id, "conflicts": conflicts},
         )

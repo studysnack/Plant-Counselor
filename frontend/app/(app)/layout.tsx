@@ -7,6 +7,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useAuthStore } from "@/lib/store/authStore";
 import { useChatStore } from "@/lib/store/chatStore";
 import Sidebar from "@/components/layout/Sidebar";
+import MobileBottomNav from "@/components/layout/MobileBottomNav";
 import ChatPanel from "@/components/chat/ChatPanel";
 import { supabase } from "@/lib/supabase";
 import { apiGet, configureClient } from "@/lib/api/client";
@@ -136,6 +137,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       </main>
 
       <ChatPanel />
+      <MobileBottomNav />
     </div>
   );
 }

@@ -219,6 +219,7 @@ export default function Sidebar() {
 
   return (
     <aside
+      className="app-sidebar"
       style={{
         position: "fixed", left: 0, top: 0, bottom: 0, zIndex: 20,
         width: "var(--sidebar-w)",

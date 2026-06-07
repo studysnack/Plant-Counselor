@@ -98,6 +98,18 @@ class CalendarEventRepository:
             end_time=None if all_day else end_time, all_day=all_day, repeat_rule=repeat_rule, color=color,
         )
 
+    def restore(self, row: dict) -> SimpleNamespace:
+        values = {key: row.get(key) for key in (
+            "id", "user_id", "plant_id", "title", "detail", "event_date",
+            "event_time", "end_date", "end_time", "all_day", "repeat_rule", "color",
+        )}
+        vals = ", ".join(_lit(values[key]) for key in (
+            "id", "user_id", "plant_id", "title", "detail", "event_date",
+            "event_time", "end_date", "end_time", "all_day", "repeat_rule", "color",
+        ))
+        self._exec(f"insert into calendar_events ({_COLS}) values ({vals})")
+        return SimpleNamespace(**values)
+
     def list_range(self, user_id: str, d_from: date, d_to: date) -> list[SimpleNamespace]:
         sql = (
             f"select {_COLS} from calendar_events "

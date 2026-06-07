@@ -7,6 +7,7 @@ import { useAuthStore } from "@/lib/store/authStore";
 import { useThemeStore, ThemeMode } from "@/lib/store/themeStore";
 import { supabase } from "@/lib/supabase";
 import { apiPatch, apiDelete } from "@/lib/api/client";
+import { exportUserData } from "@/lib/api/stats";
 import type { UserProfile } from "@/lib/store/authStore";
 
 const TABS = [
@@ -89,6 +90,11 @@ export default function SettingsPage() {
     router.replace("/login");
   }
 
+  async function handleExport(format: "json" | "csv" | "ics") {
+    const result = await exportUserData(format);
+    notify(result.ok ? "내보내기를 시작했습니다." : result.error ?? "내보내기 실패", result.ok);
+  }
+
   return (
     <div className="app-page app-page-narrow">
       <header style={{ marginBottom: 24 }}>
@@ -143,6 +149,28 @@ export default function SettingsPage() {
               <SubSection title="세션">
                 <Row label="로그아웃" sub="현재 세션을 종료합니다">
                   <button className="btn btn-danger btn-sm" onClick={handleLogout}>로그아웃</button>
+                </Row>
+              </SubSection>
+
+              <SubSection title="데이터 내보내기">
+                <Row label="개인 데이터" sub="식물, 봉우리, 일정, 대화 기록을 파일로 저장합니다">
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8, width: "100%" }}>
+                    <ExportButton
+                      title="전체 백업 JSON"
+                      desc="식물, 봉우리, 일반 일정, 대화 기록, 알림을 구조화된 백업 파일로 저장"
+                      onClick={() => handleExport("json")}
+                    />
+                    <ExportButton
+                      title="표 계산용 CSV"
+                      desc="식물, 봉우리, 일반 일정, 대화 기록, 알림을 스프레드시트용 표 형식으로 저장"
+                      onClick={() => handleExport("csv")}
+                    />
+                    <ExportButton
+                      title="캘린더 ICS"
+                      desc="일반 일정만 Apple/Google 캘린더에 가져올 수 있는 형식으로 저장"
+                      onClick={() => handleExport("ics")}
+                    />
+                  </div>
                 </Row>
               </SubSection>
 
@@ -273,6 +301,39 @@ function Row({ label, sub, children }: { label: string; sub?: string; children: 
 
 function ActionGroup({ children }: { children: React.ReactNode }) {
   return <div className="settings-action-group">{children}</div>;
+}
+
+function ExportButton({ title, desc, onClick }: { title: string; desc: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="card-flat"
+      style={{
+        width: "100%",
+        padding: "10px 12px",
+        borderRadius: "var(--r-md)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: 12,
+        textAlign: "left",
+        cursor: "pointer",
+      }}
+    >
+      <span style={{ minWidth: 0 }}>
+        <span className="t-body-sm" style={{ color: "var(--fg)", fontWeight: 600, display: "block" }}>
+          {title}
+        </span>
+        <span className="t-caption" style={{ color: "var(--fg-muted)", display: "block", marginTop: 2, lineHeight: 1.45 }}>
+          {desc}
+        </span>
+      </span>
+      <span className="btn btn-secondary btn-sm" style={{ pointerEvents: "none", flexShrink: 0 }}>
+        내보내기
+      </span>
+    </button>
+  );
 }
 
 function Radio({ active, onClick }: { active: boolean; onClick: () => void }) {

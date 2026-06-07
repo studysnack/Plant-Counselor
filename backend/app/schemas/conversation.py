@@ -8,4 +8,5 @@ class ChatRequest(BaseModel):
     scope: str = "global"
     scope_id: str | None = None
     current_screen: str = "홈"
-
+    require_confirmation: bool = True
+    confirmed_actions: list[dict] | None = None

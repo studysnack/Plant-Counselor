@@ -1,4 +1,4 @@
-import { apiGet, apiPost, apiPatch, apiDelete } from "./client";
+import { apiGet, apiPost, apiPatch, apiDelete, downloadFile } from "./client";
 
 export interface SummaryStats {
   active_concerns: number;
@@ -52,10 +52,19 @@ export interface CalendarEvent {
   repeat_rule: CalendarEventRepeatRule;
   plant_id: string | null;
   color: CalendarEventColor;
+  conflicts?: CalendarConflict[];
 }
 
 export type CalendarEventColor = "olive" | "blue" | "yellow" | "red" | "pink" | "purple";
 export type CalendarEventRepeatRule = "none" | "daily" | "weekly" | "monthly" | "yearly";
+export interface CalendarConflict {
+  event_id: string;
+  title: string;
+  date: string;
+  time: string;
+  end_time: string;
+  repeat_rule: CalendarEventRepeatRule;
+}
 
 export const createCalendarEvent = (body: {
   title: string;
@@ -88,3 +97,12 @@ export const updateCalendarEvent = (
 
 export const deleteCalendarEvent = (id: string) =>
   apiDelete<{ deleted_id: string }>(`/calendar/events/${id}`);
+
+export const undoLastAction = () =>
+  apiPost<{ kind: string; label: string; id: string }>("/undo/last");
+
+export const exportUserData = (format: "json" | "csv" | "ics") =>
+  downloadFile(
+    `/export/${format}`,
+    format === "ics" ? "plant-counselor-calendar.ics" : `plant-counselor-export.${format}`
+  );

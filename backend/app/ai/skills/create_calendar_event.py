@@ -51,6 +51,15 @@ class CreateCalendarEventSkill(SkillBase):
             return SkillResult(ok=False, message="캘린더 서비스를 사용할 수 없습니다.", error_code="no_service")
 
         try:
+            conflicts = ctx.calendar_service.detect_conflicts(
+                ctx.user_id,
+                event_date,
+                args.get("time"),
+                end_date,
+                args.get("end_time"),
+                bool(args.get("all_day", True)),
+                args.get("repeat_rule", "none"),
+            )
             ev = ctx.calendar_service.create(
                 ctx.user_id,
                 args.get("plant_id"),
@@ -71,6 +80,9 @@ class CreateCalendarEventSkill(SkillBase):
         )
         return SkillResult(
             ok=True,
-            message=f"일정 '{ev.title}'을(를) {event_date.isoformat()} {time_label}에 추가했습니다.",
-            data={"event_id": ev.id, "repeat_rule": getattr(ev, "repeat_rule", "none")},
+            message=(
+                f"일정 '{ev.title}'을(를) {event_date.isoformat()} {time_label}에 추가했습니다."
+                + (f" 겹치는 일정 {len(conflicts)}개가 있습니다." if conflicts else "")
+            ),
+            data={"event_id": ev.id, "repeat_rule": getattr(ev, "repeat_rule", "none"), "conflicts": conflicts},
         )

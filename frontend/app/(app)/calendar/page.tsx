@@ -7,6 +7,7 @@ import { useRouter } from "next/navigation";
 import {
   getCalendar, getSummary, getBriefing,
   createCalendarEvent, updateCalendarEvent, deleteCalendarEvent,
+  undoLastAction,
   type CalendarEventColor, type CalendarEventRepeatRule, type CalEvent,
 } from "@/lib/api/stats";
 import { listPlants, Plant } from "@/lib/api/plants";
@@ -45,6 +46,11 @@ function daysInMonth(y: number, m: number) { return new Date(y, m + 1, 0).getDat
 function firstWeekday(y: number, m: number) { return (new Date(y, m, 1).getDay() + 6) % 7; }
 function ymd(y: number, m: number, d: number) {
   return `${y}-${String(m + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+}
+function addDaysKey(key: string, days: number) {
+  const date = new Date(`${key}T00:00:00`);
+  date.setDate(date.getDate() + days);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
 function defaultEventTime() {
   return "12:00";
@@ -105,6 +111,58 @@ function eventColor(ev: CalEvent): string {
   return STATUS_COLOR_VAR[normalizeBudStatus(ev.status ?? "")] ?? "var(--fg-muted)";
 }
 
+function isDraggableCalendarEvent(ev: CalEvent): boolean {
+  return ev.source === "event" && (ev.repeat_rule ?? "none") === "none";
+}
+
+function isMultiDayCalendarEvent(ev: CalEvent): boolean {
+  return ev.source === "event" && (ev.repeat_rule ?? "none") === "none" && !!ev.date && !!ev.end_date && ev.date !== ev.end_date;
+}
+
+type CalendarSlotItem = { event: CalEvent; slot: number; hiddenBefore: number };
+const MONTH_EVENT_SLOT_LIMIT = 3;
+
+function eventInstanceKey(ev: CalEvent): string {
+  return `${ev.source}:${ev.id}:${ev.source === "event" && ev.repeat_rule !== "none" ? ev.occurrence_date ?? ev.date ?? "" : ""}`;
+}
+
+function buildMonthSlots(events: Record<string, CalEvent[]>): Record<string, CalendarSlotItem[]> {
+  const slotByEvent = new Map<string, number>();
+  const occupiedByDay = new Map<string, Set<number>>();
+  const result: Record<string, CalendarSlotItem[]> = {};
+  const dayKeys = Object.keys(events).sort();
+
+  for (const dayKey of dayKeys) {
+    const prevEvents = events[addDaysKey(dayKey, -1)] ?? [];
+    const dayEvents = [...(events[dayKey] ?? [])].sort((a, b) => {
+      const aContinues = isMultiDayCalendarEvent(a) && prevEvents.some((other) => other.id === a.id && other.source === "event");
+      const bContinues = isMultiDayCalendarEvent(b) && prevEvents.some((other) => other.id === b.id && other.source === "event");
+      if (aContinues !== bContinues) return aContinues ? -1 : 1;
+      return eventSortValue(a).localeCompare(eventSortValue(b));
+    });
+    for (const ev of dayEvents) {
+      const instanceKey = eventInstanceKey(ev);
+      let slot = slotByEvent.get(instanceKey);
+      if (slot === undefined) {
+        const occupied = occupiedByDay.get(dayKey) ?? new Set<number>();
+        slot = 0;
+        while (occupied.has(slot)) slot += 1;
+        slotByEvent.set(instanceKey, slot);
+      }
+      const occupied = occupiedByDay.get(dayKey) ?? new Set<number>();
+      occupied.add(slot);
+      occupiedByDay.set(dayKey, occupied);
+      const hiddenBefore = Array.from(occupied).filter((value) => value < slot && value >= MONTH_EVENT_SLOT_LIMIT).length;
+      result[dayKey] = [...(result[dayKey] ?? []), { event: ev, slot, hiddenBefore }];
+    }
+  }
+
+  for (const dayKey of Object.keys(result)) {
+    result[dayKey].sort((a, b) => a.slot - b.slot);
+  }
+  return result;
+}
+
 export default function CalendarPage() {
   const router = useRouter();
   const qc = useQueryClient();
@@ -116,6 +174,8 @@ export default function CalendarPage() {
   const [addOpen, setAddOpen] = useState(false);
   const [addDate, setAddDate] = useState<string>("");
   const [editingEvent, setEditingEvent] = useState<{ event: CalEvent; date: string } | null>(null);
+  const [draggingEvent, setDraggingEvent] = useState<CalEvent | null>(null);
+  const [notice, setNotice] = useState<string>("");
 
   const from = ymd(year, month, 1);
   const to   = ymd(year, month, daysInMonth(year, month));
@@ -148,6 +208,7 @@ export default function CalendarPage() {
   const { data: plantsRes }                          = useQuery({ queryKey: QK.plants(),   queryFn: () => listPlants(),                     enabled: !!accessToken });
 
   const events: Record<string, CalEvent[]> = calRes?.ok ? calRes.data.events : {};
+  const monthSlots = useMemo(() => buildMonthSlots(events), [events]);
   const summary = summaryRes?.ok ? summaryRes.data : null;
   const briefing = briefRes?.ok ? briefRes.data.briefing : "";
   const plants: Plant[] = plantsRes?.ok ? plantsRes.data.items : [];
@@ -192,8 +253,44 @@ export default function CalendarPage() {
   async function handleDeleteEvent(id: string) {
     if (!window.confirm("이 일정을 삭제할까요?")) return;
     const r = await deleteCalendarEvent(id);
-    if (r.ok) invalidateCalendar();
+    if (r.ok) {
+      setNotice("일정을 삭제했습니다.");
+      invalidateCalendar();
+    }
     else window.alert(`일정 삭제 실패: ${r.error.message}`);
+  }
+
+  async function handleUndo() {
+    const r = await undoLastAction();
+    if (r.ok) {
+      setNotice(`되돌렸습니다: ${r.data.label}`);
+      invalidateCalendar();
+      qc.invalidateQueries({ queryKey: ["buds"] });
+      qc.invalidateQueries({ queryKey: ["plants"] });
+    } else {
+      window.alert(r.error.message);
+    }
+  }
+
+  async function moveEventToDate(ev: CalEvent, targetDate: string) {
+    if (ev.source !== "event" || !ev.date || ev.date === targetDate) return;
+    if ((ev.repeat_rule ?? "none") !== "none") {
+      window.alert("반복 일정은 드래그로 이동하지 않고 수정 창에서 시작 날짜를 변경해주세요.");
+      return;
+    }
+    const start = new Date(`${ev.date}T00:00:00`);
+    const end = new Date(`${ev.end_date ?? ev.date}T00:00:00`);
+    const durationMs = Math.max(0, end.getTime() - start.getTime());
+    const target = new Date(`${targetDate}T00:00:00`);
+    const newEnd = new Date(target.getTime() + durationMs);
+    const newEndDate = `${newEnd.getFullYear()}-${String(newEnd.getMonth() + 1).padStart(2, "0")}-${String(newEnd.getDate()).padStart(2, "0")}`;
+    const r = await updateCalendarEvent(ev.id, { date: targetDate, end_date: newEndDate });
+    if (r.ok) {
+      setSelected(Number(targetDate.slice(8, 10)));
+      invalidateCalendar();
+    } else {
+      window.alert(`일정 이동 실패: ${r.error.message}`);
+    }
   }
 
   return (
@@ -209,6 +306,14 @@ export default function CalendarPage() {
           </p>
         </div>
       </header>
+
+      {notice && (
+        <div className="card animate-in" style={{ marginBottom: 12, padding: "10px 12px", display: "flex", alignItems: "center", gap: 10, background: "var(--accent-muted)" }}>
+          <span className="t-body-sm" style={{ color: "var(--accent-fg)", flex: 1 }}>{notice}</span>
+          <button className="btn btn-secondary btn-sm" onClick={handleUndo}>되돌리기</button>
+          <button className="btn btn-ghost btn-sm" onClick={() => setNotice("")}>닫기</button>
+        </div>
+      )}
 
       <div className="calendar-layout">
         {/* Calendar card */}
@@ -237,10 +342,23 @@ export default function CalendarPage() {
               if (!d) return <div key={`empty-${i}`} />;
               const key = ymd(year, month, d);
               const dayEvents = events[key] ?? [];
+              const daySlots = monthSlots[key] ?? [];
               const t = isToday(d);
               const sel = selected === d;
               return (
-                <button key={key} onClick={() => setSelected(d)} style={{
+                <div
+                  key={key}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => setSelected(d)}
+                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") setSelected(d); }}
+                  onDragOver={(e) => { if (draggingEvent) e.preventDefault(); }}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    if (draggingEvent) void moveEventToDate(draggingEvent, key);
+                    setDraggingEvent(null);
+                  }}
+                  style={{
                   minHeight: 56, padding: "6px 7px", borderRadius: "var(--r-md)",
                   border: "1px solid", borderColor: t ? "var(--accent)" : sel ? "var(--accent)" : "transparent",
                   background: t ? "var(--accent-muted)" : sel ? "var(--bg-subtle)" : "transparent",
@@ -251,15 +369,56 @@ export default function CalendarPage() {
                   onMouseLeave={e => { if (!t && !sel) e.currentTarget.style.background = "transparent"; }}
                 >
                   <span style={{ fontSize: 13, fontWeight: t ? 700 : 500, color: t ? "var(--accent-fg)" : "var(--fg)", fontVariantNumeric: "tabular-nums" }}>{d}</span>
-                  {dayEvents.length > 0 && (
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: 3, marginTop: 1 }}>
-                      {dayEvents.slice(0, 3).map((ev, j) => (
-                        <span key={j} className="dot" style={{ width: 5, height: 5, background: eventColor(ev) }} title={ev.title} />
-                      ))}
-                      {dayEvents.length > 3 && <span className="t-caption" style={{ color: "var(--fg-muted)", fontSize: 10 }}>+{dayEvents.length - 3}</span>}
+                  {daySlots.length > 0 && (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 2, marginTop: 1 }}>
+                      {Array.from({ length: Math.min(MONTH_EVENT_SLOT_LIMIT, Math.max(...daySlots.map((item) => item.slot), 0) + 1) }, (_, slot) => {
+                        const item = daySlots.find((candidate) => candidate.slot === slot);
+                        if (!item) return <div key={`empty-slot-${slot}`} style={{ height: 16 }} />;
+                        const ev = item.event;
+                        const draggable = isDraggableCalendarEvent(ev);
+                        const connected = isMultiDayCalendarEvent(ev);
+                        const continuesFromPrev = connected && (events[addDaysKey(key, -1)] ?? []).some((other) => other.id === ev.id && other.source === "event");
+                        const continuesToNext = connected && (events[addDaysKey(key, 1)] ?? []).some((other) => other.id === ev.id && other.source === "event");
+                        return (
+                        <div
+                          key={`${ev.id}-${ev.occurrence_date ?? slot}`}
+                          draggable={draggable}
+                          onDragStart={(e) => {
+                            if (!draggable) return;
+                            e.stopPropagation();
+                            e.dataTransfer.effectAllowed = "move";
+                            e.dataTransfer.setData("text/plain", ev.id);
+                            setDraggingEvent(ev);
+                          }}
+                          onDragEnd={() => setDraggingEvent(null)}
+                          title={draggable ? `${ev.title} 드래그해서 날짜 이동` : ev.source === "event" ? `${ev.title} · 반복 일정은 수정 창에서 변경` : ev.title}
+                          style={{
+                            minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                            fontSize: 10.5, lineHeight: "15px", height: 16, padding: "0 5px",
+                            marginLeft: continuesFromPrev ? -11 : 0,
+                            marginRight: continuesToNext ? -11 : 0,
+                            borderTopLeftRadius: continuesFromPrev ? 0 : 5,
+                            borderBottomLeftRadius: continuesFromPrev ? 0 : 5,
+                            borderTopRightRadius: continuesToNext ? 0 : 5,
+                            borderBottomRightRadius: continuesToNext ? 0 : 5,
+                            color: "white", background: eventColor(ev),
+                            opacity: ev.source === "event" ? 0.9 : 0.55,
+                            cursor: draggable ? "grab" : "default",
+                            position: "relative",
+                            zIndex: connected ? 1 : "auto",
+                          }}
+                        >
+                          {continuesFromPrev ? "" : ev.title}
+                        </div>
+                      );})}
+                      {daySlots.some((item) => item.slot >= MONTH_EVENT_SLOT_LIMIT) && (
+                        <span className="t-caption" style={{ color: "var(--fg-muted)", fontSize: 10 }}>
+                          +{daySlots.filter((item) => item.slot >= MONTH_EVENT_SLOT_LIMIT).length}
+                        </span>
+                      )}
                     </div>
                   )}
-                </button>
+                </div>
               );
             })}
           </div>
@@ -404,7 +563,18 @@ function EventModal({
       ? await updateCalendarEvent(event.id, body)
       : await createCalendarEvent(body);
     setSaving(false);
-    if (r.ok) onSaved();
+    if (r.ok) {
+      if (r.data.conflicts && r.data.conflicts.length > 0) {
+        window.alert(
+          `겹치는 일정 ${r.data.conflicts.length}개가 있습니다.\n` +
+          r.data.conflicts
+            .slice(0, 4)
+            .map((conflict) => `- ${conflict.date} ${conflict.time}–${conflict.end_time} ${conflict.title}`)
+            .join("\n")
+        );
+      }
+      onSaved();
+    }
     else setErr(r.error.message || `일정 ${editing ? "수정" : "추가"}에 실패했습니다.`);
   }
 

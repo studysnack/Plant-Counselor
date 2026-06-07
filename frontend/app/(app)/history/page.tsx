@@ -571,7 +571,7 @@ export default function HistoryPage() {
   return (
     // Full-viewport flex column so the grid fills exactly the remaining height
     // and the message list can scroll without the outer box growing.
-    <div className="app-page app-page-wide history-shell" style={{ "--page-pad-bottom": "24px" } as CSSProperties}>
+    <div className="app-page app-page-wide history-shell" style={{ "--page-pad-bottom": "32px" } as CSSProperties}>
       {/* Page header */}
       <header className="animate-in" style={{ marginBottom: 16, flexShrink: 0 }}>
         <h1 className="t-display" style={{ color: "var(--fg)" }}>대화 기록</h1>

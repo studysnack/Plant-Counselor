@@ -8,6 +8,7 @@ import { useChatStore, MIN_CHAT_W, MAX_CHAT_W } from "@/lib/store/chatStore";
 import { useAuthStore } from "@/lib/store/authStore";
 import { streamChat } from "@/lib/api/client";
 import { getHistory, deleteConversation } from "@/lib/api/conversations";
+import { undoLastAction } from "@/lib/api/stats";
 import { getPlant, listPlants, Plant } from "@/lib/api/plants";
 import { getBud } from "@/lib/api/buds";
 import { QK } from "@/lib/queryKeys";
@@ -15,7 +16,20 @@ import { MarkdownText } from "@/lib/markdown";
 
 // ── types ───────────────────────────────────────────────────
 
-type SystemKind = "plants_list" | "skills_list" | "cmd_result";
+type SystemKind = "plants_list" | "skills_list" | "cmd_result" | "action_preview";
+
+interface PendingAction {
+  name: string;
+  args: Record<string, unknown>;
+  conflicts?: {
+    event_id: string;
+    title: string;
+    date: string;
+    time: string;
+    end_time: string;
+    repeat_rule?: string;
+  }[];
+}
 
 interface Message {
   id: string;
@@ -25,6 +39,7 @@ interface Message {
   fromHistory?: boolean;
   kind?: SystemKind;
   plantsData?: Plant[];
+  actions?: PendingAction[];
 }
 
 // ── constants ───────────────────────────────────────────────
@@ -38,6 +53,7 @@ const QUICK_ASKS = [
 const COMMANDS = [
   { cmd: "/clear",    label: "화면 지우기", desc: "화면의 대화 내용만 비웁니다 (기록은 유지)" },
   { cmd: "/delete",   label: "기록 완전 삭제", desc: "현재 세션의 대화 기록을 영구 삭제합니다" },
+  { cmd: "/undo",     label: "최근 작업 되돌리기", desc: "삭제/포기/수확 등 최근 변경을 되돌립니다" },
   { cmd: "/compact",  label: "대화 요약", desc: "지금까지 대화를 핵심만 요약합니다" },
   { cmd: "/plants",   label: "식물 보기", desc: "내 식물 목록을 표시합니다" },
   { cmd: "/new",      label: "새 봉우리", desc: "AI 안내로 봉우리를 만듭니다" },
@@ -82,6 +98,10 @@ const SKILL_INVALIDATIONS: Record<string, string[]> = {
   abandon_bud:         ["buds", "plants", "stats", "briefing", "bud"],
   set_deadline:        ["buds", "bud", "calendar", "stats"],
 };
+
+const SKILL_LABELS: Record<string, string> = Object.fromEntries(
+  SKILLS_INFO.map((skill) => [skill.name, skill.desc])
+);
 
 // ── inline renderers ────────────────────────────────────────
 
@@ -326,6 +346,7 @@ export default function ChatPanel() {
   const dirtySkills = useRef<Set<string>>(new Set());
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const sendTextRef = useRef<(text: string) => void>(() => {});
   const prevScopeKey = useRef("");
 
   const scopeKey = `${scope.kind}:${scope.id ?? ""}`;
@@ -399,11 +420,11 @@ export default function ChatPanel() {
   useEffect(() => {
     function handler(e: Event) {
       const detail = (e as CustomEvent<string>).detail;
-      if (typeof detail === "string" && detail.trim()) sendText(detail);
+      if (typeof detail === "string" && detail.trim()) sendTextRef.current(detail);
     }
     window.addEventListener("pc-chat-prompt", handler);
     return () => window.removeEventListener("pc-chat-prompt", handler);
-  }, [scope]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -446,6 +467,30 @@ export default function ChatPanel() {
       }]);
       return;
     }
+    if (cmd === "/undo") {
+      const r = await undoLastAction();
+      if (r.ok) {
+        qc.invalidateQueries({ queryKey: ["plants"] });
+        qc.invalidateQueries({ queryKey: ["buds"] });
+        qc.invalidateQueries({ queryKey: ["bud"] });
+        qc.invalidateQueries({ queryKey: ["calendar"] });
+        qc.invalidateQueries({ queryKey: ["stats"] });
+        setMessages((prev) => [...prev, {
+          id: `cmd-undo-${Date.now()}`,
+          role: "system",
+          kind: "cmd_result",
+          text: `되돌렸어요: ${r.data.label}`,
+        }]);
+      } else {
+        setMessages((prev) => [...prev, {
+          id: `cmd-undo-err-${Date.now()}`,
+          role: "system",
+          kind: "cmd_result",
+          text: `되돌릴 수 없어요: ${r.error.message}`,
+        }]);
+      }
+      return;
+    }
     if (cmd === "/settings") {
       close();
       router.push("/settings");
@@ -474,11 +519,11 @@ export default function ChatPanel() {
         .map((m) => `${m.role === "user" ? "사용자" : "AI"}: ${m.text}`)
         .join("\n");
       if (!textHistory) return;
-      sendText(`다음 대화를 핵심만 3~5문장으로 요약해줘. 요약만 출력해줘:\n\n${textHistory}`);
+      sendTextRef.current(`다음 대화를 핵심만 3~5문장으로 요약해줘. 요약만 출력해줘:\n\n${textHistory}`);
       return;
     }
     if (cmd === "/new") {
-      sendText("봉우리를 새로 만들고 싶습니다. 다음 항목을 하나씩 물어봐서 수집한 뒤 create_bud를 호출해주세요: ① 어떤 식물에 추가할까요? ② 봉우리 제목은요? ③ 고민인가요 일정인가요? ④ 세부 내용이 있나요? (없으면 넘어가도 됩니다) ⑤ 마감일이 있나요? (없으면 넘어가도 됩니다) — 지금 ①번 질문부터 시작해주세요.");
+      sendTextRef.current("봉우리를 새로 만들고 싶습니다. 다음 항목을 하나씩 물어봐서 수집한 뒤 create_bud를 호출해주세요: ① 어떤 식물에 추가할까요? ② 봉우리 제목은요? ③ 고민인가요 일정인가요? ④ 세부 내용이 있나요? (없으면 넘어가도 됩니다) ⑤ 마감일이 있나요? (없으면 넘어가도 됩니다) — 지금 ①번 질문부터 시작해주세요.");
       return;
     }
     if (cmd === "/use") {
@@ -492,12 +537,59 @@ export default function ChatPanel() {
         }]);
         return;
       }
-      sendText(`${skillName} 스킬을 지금 바로 실행해줘. 필요한 파라미터가 있으면 나에게 물어봐줘.`);
+      sendTextRef.current(`${skillName} 스킬을 지금 바로 실행해줘. 필요한 파라미터가 있으면 나에게 물어봐줘.`);
       return;
     }
   }, [messages, close, router, scope, qc]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── send / stream ────────────────────────────────────────
+
+  const invalidateSkills = useCallback((skills: Iterable<string>) => {
+    const keys = new Set<string>();
+    for (const skill of skills) {
+      (SKILL_INVALIDATIONS[skill] ?? []).forEach((k) => keys.add(k));
+    }
+    keys.forEach((k) => qc.invalidateQueries({ queryKey: [k] }));
+  }, [qc]);
+
+  const executeActions = useCallback((actions: PendingAction[], sourceId: string) => {
+    if (loading) return;
+    const asstId = `confirm-${Date.now()}`;
+    setMessages((prev) => prev.map((m) =>
+      m.id === sourceId ? { ...m, kind: "cmd_result" as const, text: "승인됨. 작업을 실행합니다.", actions: undefined } : m
+    ).concat({ id: asstId, role: "assistant", text: "", pending: true }));
+    setLoading(true);
+    const dirty = new Set(actions.map((action) => action.name));
+    let accumulated = "";
+    streamChat(
+      {
+        text: "승인된 작업 실행",
+        scope: scope.kind,
+        scope_id: scope.id,
+        current_screen: scope.kind === "calendar" ? "캘린더" : "웹",
+        require_confirmation: false,
+        confirmed_actions: actions,
+      },
+      {
+        onToken: (chunk) => {
+          accumulated += chunk;
+          setMessages((prev) => prev.map((m) => m.id === asstId ? { ...m, text: accumulated } : m));
+        },
+        onToolResult: (name) => dirty.add(name),
+        onDone: () => {
+          setMessages((prev) => prev.map((m) =>
+            m.id === asstId ? { ...m, text: m.text || "작업을 실행했습니다.", pending: false } : m
+          ));
+          invalidateSkills(dirty);
+          setLoading(false);
+        },
+        onError: (_, msg) => {
+          setMessages((prev) => prev.map((m) => m.id === asstId ? { ...m, text: `⚠ ${msg}`, pending: false } : m));
+          setLoading(false);
+        },
+      }
+    );
+  }, [loading, scope, invalidateSkills]);
 
   const sendText = useCallback((text: string) => {
     const userMsg: Message = { id: Date.now().toString(), role: "user", text };
@@ -530,6 +622,18 @@ export default function ChatPanel() {
             }
           }
         },
+        onConfirmationRequired: (intended) => {
+          const payload = intended as { actions?: PendingAction[]; message?: string };
+          const actions = Array.isArray(payload.actions) ? payload.actions : [];
+          setMessages((prev) => prev.map((m) => m.id === asstId ? {
+            ...m,
+            role: "system",
+            kind: "action_preview",
+            text: payload.message ?? "AI가 데이터를 변경하려고 합니다. 실행 전에 확인해주세요.",
+            actions,
+            pending: false,
+          } : m));
+        },
         onDone: () => {
           setMessages((prev) => prev.map((m) =>
             m.id === asstId
@@ -538,11 +642,7 @@ export default function ChatPanel() {
           ));
           setLoading(false);
           if (dirtySkills.current.size > 0) {
-            const keys = new Set<string>();
-            dirtySkills.current.forEach((skill) =>
-              (SKILL_INVALIDATIONS[skill] ?? []).forEach((k) => keys.add(k))
-            );
-            keys.forEach((k) => qc.invalidateQueries({ queryKey: [k] }));
+            invalidateSkills(dirtySkills.current);
             dirtySkills.current.clear();
           }
         },
@@ -552,7 +652,11 @@ export default function ChatPanel() {
         },
       }
     );
-  }, [scope, qc]);
+  }, [scope, invalidateSkills]);
+
+  useEffect(() => {
+    sendTextRef.current = sendText;
+  }, [sendText]);
 
   const send = useCallback((text?: string) => {
     const t = (text ?? input).trim();
@@ -727,6 +831,53 @@ export default function ChatPanel() {
                       }}
                     >
                       {msg.text}
+                    </div>
+                  );
+                }
+                if (msg.kind === "action_preview") {
+                  const actions = msg.actions ?? [];
+                  return (
+                    <div key={msg.id} className="animate-in card" style={{ padding: 12, background: "var(--bg-subtle)" }}>
+                      <div className="t-label" style={{ color: "var(--fg-muted)", marginBottom: 6 }}>AI 실행 전 미리보기</div>
+                      <div className="t-body-sm" style={{ color: "var(--fg)", lineHeight: 1.55, marginBottom: 10 }}>{msg.text}</div>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 10 }}>
+                        {actions.map((action, index) => (
+                          <div key={`${action.name}-${index}`} style={{ border: "1px solid var(--border)", borderRadius: "var(--r-sm)", padding: "7px 8px", background: "var(--bg-elevated)" }}>
+                            <div className="t-body-sm" style={{ color: "var(--fg)", fontWeight: 600 }}>{SKILL_LABELS[action.name] ?? action.name}</div>
+                            <code className="t-mono" style={{ display: "block", marginTop: 4, color: "var(--fg-muted)", fontSize: 11, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                              {JSON.stringify(action.args, null, 2)}
+                            </code>
+                            {action.conflicts && action.conflicts.length > 0 && (
+                              <div style={{ marginTop: 8, padding: "7px 8px", borderRadius: "var(--r-sm)", background: "color-mix(in srgb, var(--warning) 12%, transparent)", border: "1px solid color-mix(in srgb, var(--warning) 28%, transparent)" }}>
+                                <div className="t-caption" style={{ color: "var(--warning)", fontWeight: 700, marginBottom: 4 }}>
+                                  겹치는 일정 {action.conflicts.length}개
+                                </div>
+                                {action.conflicts.slice(0, 3).map((conflict) => (
+                                  <div key={`${conflict.event_id}-${conflict.date}`} className="t-caption" style={{ color: "var(--fg-secondary)", lineHeight: 1.45 }}>
+                                    {conflict.date} {conflict.time}–{conflict.end_time} · {conflict.title}
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                      <div style={{ display: "flex", justifyContent: "flex-end", gap: 6 }}>
+                        <button
+                          className="btn btn-ghost btn-sm"
+                          disabled={loading}
+                          onClick={() => setMessages((prev) => prev.map((m) => m.id === msg.id ? { ...m, kind: "cmd_result" as const, text: "취소했습니다.", actions: undefined } : m))}
+                        >
+                          취소
+                        </button>
+                        <button
+                          className="btn btn-primary btn-sm"
+                          disabled={loading || actions.length === 0}
+                          onClick={() => executeActions(actions, msg.id)}
+                        >
+                          실행
+                        </button>
+                      </div>
                     </div>
                   );
                 }

@@ -1,11 +1,17 @@
 from __future__ import annotations
 import json
+from datetime import date
 
 from app.ai.log_recorder import LogRecorder
 from app.ai.skill_base import SkillContext
 import app.runtime_settings as rs
 
 MAX_STEPS = 10  # fallback; actual value read from runtime_settings each run
+MUTATING_SKILLS = {
+    "create_plant", "delete_plant", "create_bud", "update_bud_status",
+    "update_bud_progress", "set_deadline", "abandon_bud", "harvest_bud",
+    "create_calendar_event", "update_calendar_event", "delete_calendar_event",
+}
 
 
 class ChatOrchestrator:
@@ -26,6 +32,41 @@ class ChatOrchestrator:
         rec.log_llm_error(call_n, err, kind, cause)
         rec.log_event(f"llm_error_{call_n}", f"kind={kind} error={err[:200]}")
 
+    def _preview_conflicts(self, user_id: str, tool_use: dict, cal_svc) -> list[dict]:
+        if cal_svc is None:
+            return []
+        name = tool_use.get("name")
+        args = tool_use.get("input") or {}
+        if name not in {"create_calendar_event", "update_calendar_event"}:
+            return []
+        try:
+            if name == "create_calendar_event":
+                event_date = date.fromisoformat(str(args["date"])[:10])
+                end_date = date.fromisoformat(str(args["end_date"])[:10]) if args.get("end_date") else None
+                return cal_svc.detect_conflicts(
+                    user_id, event_date, args.get("time"), end_date, args.get("end_time"),
+                    bool(args.get("all_day", True)), args.get("repeat_rule", "none"),
+                )
+            current = cal_svc._repo.get(user_id, args["event_id"])
+            if current is None:
+                return []
+            event_date = date.fromisoformat(str(args["date"])[:10]) if args.get("date") else date.fromisoformat(str(current.event_date)[:10])
+            end_date = date.fromisoformat(str(args["end_date"])[:10]) if args.get("end_date") else date.fromisoformat(str(getattr(current, "end_date", current.event_date))[:10])
+            all_day = bool(args["all_day"]) if args.get("all_day") is not None else bool(getattr(current, "all_day", True))
+            event_time = args.get("time") if "time" in args else (
+                str(getattr(current, "event_time", ""))[:5] if getattr(current, "event_time", None) else None
+            )
+            end_time = args.get("end_time") if "end_time" in args else (
+                str(getattr(current, "end_time", ""))[:5] if getattr(current, "end_time", None) else None
+            )
+            repeat_rule = args.get("repeat_rule") or getattr(current, "repeat_rule", "none") or "none"
+            return cal_svc.detect_conflicts(
+                user_id, event_date, event_time, end_date, end_time, all_day, repeat_rule,
+                exclude_event_id=args["event_id"],
+            )
+        except Exception:
+            return []
+
     def run(
         self,
         user_id: str,
@@ -35,6 +76,7 @@ class ChatOrchestrator:
         current_screen: str,
         db,
         tone: str = "counselor",
+        require_confirmation: bool = True,
     ):
         """동기 제너레이터: SSE 이벤트 문자열을 yield합니다."""
         rec = LogRecorder(user_id, text)
@@ -138,6 +180,26 @@ class ChatOrchestrator:
 
             if tool_use:
                 last_tool_use = tool_use
+                if require_confirmation and tool_use["name"] in MUTATING_SKILLS:
+                    conflicts = self._preview_conflicts(user_id, tool_use, cal_svc)
+                    rec.log_event(
+                        f"confirmation_required_{step + 1}",
+                        f"{tool_use['name']} args={tool_use['input']}",
+                    )
+                    yield (
+                        "event: confirmation_required\ndata: "
+                        f"{json.dumps({'actions': [{'name': tool_use['name'], 'args': tool_use['input'], 'conflicts': conflicts}], 'message': 'AI가 데이터를 변경하려고 합니다. 실행 전에 확인해주세요.'}, ensure_ascii=False)}\n\n"
+                    )
+                    rec.set_final("작업 실행 전 확인이 필요합니다.")
+                    if conv_svc:
+                        conv_svc.append(
+                            user_id, scope, scope_id, "assistant",
+                            "작업 실행 전 확인이 필요합니다.",
+                            skill_call={"name": tool_use["name"], "input": tool_use["input"], "pending_confirmation": True},
+                        )
+                    rec.save(db)
+                    yield "event: done\ndata: {}\n\n"
+                    return
                 yield f"event: tool_call\ndata: {json.dumps({'name': tool_use['name'], 'args': tool_use['input']})}\n\n"
 
                 skill_result = self.registry.dispatch(tool_use["name"], tool_use["input"], ctx)
