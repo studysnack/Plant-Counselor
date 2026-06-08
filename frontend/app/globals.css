@@ -239,7 +239,7 @@ a { color: inherit; text-decoration: none; }
 .calendar-layout {
   display: grid;
   grid-template-columns: minmax(0, min(100%, 820px)) minmax(300px, 340px);
-  grid-template-rows: clamp(440px, 52vh, 560px);
+  grid-template-rows: auto;
   align-items: stretch;
   justify-content: center;
   gap: 16px;
@@ -250,6 +250,70 @@ a { color: inherit; text-decoration: none; }
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 210px), 1fr));
   gap: 12px;
+}
+
+.calendar-month-scroll {
+  width: 100%;
+  overflow-x: auto;
+  overflow-y: visible;
+  padding-bottom: 2px;
+  scrollbar-gutter: stable;
+}
+
+.calendar-month-inner {
+  min-width: 0;
+}
+
+.calendar-weekday-row,
+.calendar-month-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+}
+
+.calendar-weekday-row {
+  margin-bottom: 6px;
+}
+
+.calendar-month-grid {
+  gap: 4px;
+}
+
+.calendar-day-cell {
+  min-height: 56px;
+  padding: 6px 7px;
+  border: 1px solid transparent;
+  border-radius: var(--r-md);
+  cursor: pointer;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  transition: background 0.1s;
+  min-width: 0;
+  overflow: visible;
+}
+
+.calendar-event-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 1px;
+  min-width: 0;
+}
+
+.calendar-event-pill {
+  min-width: 0;
+  margin-left: var(--event-left, 0);
+  margin-right: var(--event-right, 0);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10.5px;
+  line-height: 15px;
+  height: 16px;
+  padding: 0 5px;
+  color: white;
+  position: relative;
 }
 
 .calendar-all-day-toggle {
@@ -654,6 +718,35 @@ a { color: inherit; text-decoration: none; }
 
   .calendar-layout > .card:first-of-type {
     min-height: 440px;
+  }
+
+  .calendar-month-scroll {
+    margin-inline: -4px;
+    padding-inline: 4px;
+  }
+
+  .calendar-month-inner {
+    min-width: 0;
+  }
+
+  .calendar-day-cell {
+    min-height: 52px;
+    padding: 5px 4px;
+    gap: 2px;
+  }
+
+  .calendar-event-stack {
+    gap: 3px;
+  }
+
+  .calendar-event-pill {
+    height: 7px;
+    line-height: 7px;
+    padding: 0 3px;
+    font-size: 0;
+    margin-left: clamp(-5px, var(--event-left, 0px), 0px);
+    margin-right: clamp(-5px, var(--event-right, 0px), 0px);
+    border-radius: 999px !important;
   }
 
   .settings-layout {
