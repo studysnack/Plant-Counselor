@@ -318,7 +318,7 @@ export default function CalendarPage() {
       <div className="calendar-layout">
         {/* Calendar card */}
         {loadingCal ? <CalendarSkeleton /> : null}
-        <section className="card" style={{ padding: 18, height: "100%", minHeight: 0, overflow: "hidden", display: loadingCal ? "none" : undefined }}>
+        <section className="card" style={{ padding: 18, minHeight: 0, overflow: "visible", display: loadingCal ? "none" : undefined }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
             <div>
               <div className="t-h1" style={{ color: "var(--fg)" }}>{year}년 {MONTHS[month]}</div>
@@ -331,101 +331,113 @@ export default function CalendarPage() {
             </div>
           </div>
 
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", marginBottom: 6 }}>
-            {WEEKDAYS.map(w => (
-              <div key={w} className="t-caption" style={{ color: "var(--fg-muted)", textAlign: "center", padding: "6px 0" }}>{w}</div>
-            ))}
-          </div>
+          <div className="calendar-month-scroll">
+            <div className="calendar-month-inner">
+              <div className="calendar-weekday-row">
+                {WEEKDAYS.map(w => (
+                  <div key={w} className="t-caption" style={{ color: "var(--fg-muted)", textAlign: "center", padding: "6px 0" }}>{w}</div>
+                ))}
+              </div>
 
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 4 }}>
-            {cells.map((d, i) => {
-              if (!d) return <div key={`empty-${i}`} />;
-              const key = ymd(year, month, d);
-              const dayEvents = events[key] ?? [];
-              const daySlots = monthSlots[key] ?? [];
-              const t = isToday(d);
-              const sel = selected === d;
-              return (
-                <div
-                  key={key}
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => setSelected(d)}
-                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") setSelected(d); }}
-                  onDragOver={(e) => { if (draggingEvent) e.preventDefault(); }}
-                  onDrop={(e) => {
-                    e.preventDefault();
-                    if (draggingEvent) void moveEventToDate(draggingEvent, key);
-                    setDraggingEvent(null);
-                  }}
-                  style={{
-                  minHeight: 56, padding: "6px 7px", borderRadius: "var(--r-md)",
-                  border: "1px solid", borderColor: t ? "var(--accent)" : sel ? "var(--accent)" : "transparent",
-                  background: t ? "var(--accent-muted)" : sel ? "var(--bg-subtle)" : "transparent",
-                  cursor: "pointer", textAlign: "left", display: "flex", flexDirection: "column", gap: 3,
-                  transition: "background 0.1s",
-                }}
-                  onMouseEnter={e => { if (!t && !sel) e.currentTarget.style.background = "var(--bg-hover)"; }}
-                  onMouseLeave={e => { if (!t && !sel) e.currentTarget.style.background = "transparent"; }}
-                >
-                  <span style={{ fontSize: 13, fontWeight: t ? 700 : 500, color: t ? "var(--accent-fg)" : "var(--fg)", fontVariantNumeric: "tabular-nums" }}>{d}</span>
-                  {daySlots.length > 0 && (
-                    <div style={{ display: "flex", flexDirection: "column", gap: 2, marginTop: 1 }}>
-                      {Array.from({ length: Math.min(MONTH_EVENT_SLOT_LIMIT, Math.max(...daySlots.map((item) => item.slot), 0) + 1) }, (_, slot) => {
-                        const item = daySlots.find((candidate) => candidate.slot === slot);
-                        if (!item) return <div key={`empty-slot-${slot}`} style={{ height: 16 }} />;
-                        const ev = item.event;
-                        const draggable = isDraggableCalendarEvent(ev);
-                        const connected = isMultiDayCalendarEvent(ev);
-                        const continuesFromPrev = connected && (events[addDaysKey(key, -1)] ?? []).some((other) => other.id === ev.id && other.source === "event");
-                        const continuesToNext = connected && (events[addDaysKey(key, 1)] ?? []).some((other) => other.id === ev.id && other.source === "event");
-                        return (
-                        <div
-                          key={`${ev.id}-${ev.occurrence_date ?? slot}`}
-                          draggable={draggable}
-                          onDragStart={(e) => {
-                            if (!draggable) return;
-                            e.stopPropagation();
-                            e.dataTransfer.effectAllowed = "move";
-                            e.dataTransfer.setData("text/plain", ev.id);
-                            setDraggingEvent(ev);
-                          }}
-                          onDragEnd={() => setDraggingEvent(null)}
-                          title={draggable ? `${ev.title} 드래그해서 날짜 이동` : ev.source === "event" ? `${ev.title} · 반복 일정은 수정 창에서 변경` : ev.title}
-                          style={{
-                            minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-                            fontSize: 10.5, lineHeight: "15px", height: 16, padding: "0 5px",
-                            marginLeft: continuesFromPrev ? -11 : 0,
-                            marginRight: continuesToNext ? -11 : 0,
-                            borderTopLeftRadius: continuesFromPrev ? 0 : 5,
-                            borderBottomLeftRadius: continuesFromPrev ? 0 : 5,
-                            borderTopRightRadius: continuesToNext ? 0 : 5,
-                            borderBottomRightRadius: continuesToNext ? 0 : 5,
-                            color: "white", background: eventColor(ev),
-                            opacity: ev.source === "event" ? 0.9 : 0.55,
-                            cursor: draggable ? "grab" : "default",
-                            position: "relative",
-                            zIndex: connected ? 1 : "auto",
-                          }}
-                        >
-                          {continuesFromPrev ? "" : ev.title}
+              <div className="calendar-month-grid">
+                {cells.map((d, i) => {
+                  if (!d) return <div key={`empty-${i}`} />;
+                  const key = ymd(year, month, d);
+                  const dayEvents = events[key] ?? [];
+                  const daySlots = monthSlots[key] ?? [];
+                  const t = isToday(d);
+                  const sel = selected === d;
+                  return (
+                    <div
+                      key={key}
+                      role="button"
+                      tabIndex={0}
+                      className="calendar-day-cell"
+                      onClick={() => setSelected(d)}
+                      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") setSelected(d); }}
+                      onDragOver={(e) => { if (draggingEvent) e.preventDefault(); }}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        if (draggingEvent) void moveEventToDate(draggingEvent, key);
+                        setDraggingEvent(null);
+                      }}
+                      style={{
+                        borderColor: t ? "var(--accent)" : sel ? "var(--accent)" : "transparent",
+                        background: t ? "var(--accent-muted)" : sel ? "var(--bg-subtle)" : "transparent",
+                      }}
+                      onMouseEnter={e => { if (!t && !sel) e.currentTarget.style.background = "var(--bg-hover)"; }}
+                      onMouseLeave={e => { if (!t && !sel) e.currentTarget.style.background = "transparent"; }}
+                    >
+                      <span
+                        style={{
+                          fontSize: 13,
+                          fontWeight: t ? 700 : 500,
+                          color: t ? "var(--accent-fg)" : "var(--fg)",
+                          fontVariantNumeric: "tabular-nums",
+                          whiteSpace: "nowrap",
+                          lineHeight: 1.2,
+                        }}
+                      >
+                        {d}
+                      </span>
+                      {daySlots.length > 0 && (
+                        <div className="calendar-event-stack">
+                          {Array.from({ length: Math.min(MONTH_EVENT_SLOT_LIMIT, Math.max(...daySlots.map((item) => item.slot), 0) + 1) }, (_, slot) => {
+                            const item = daySlots.find((candidate) => candidate.slot === slot);
+                            if (!item) return <div key={`empty-slot-${slot}`} style={{ height: 16 }} />;
+                            const ev = item.event;
+                            const draggable = isDraggableCalendarEvent(ev);
+                            const connected = isMultiDayCalendarEvent(ev);
+                            const continuesFromPrev = connected && (events[addDaysKey(key, -1)] ?? []).some((other) => other.id === ev.id && other.source === "event");
+                            const continuesToNext = connected && (events[addDaysKey(key, 1)] ?? []).some((other) => other.id === ev.id && other.source === "event");
+                            return (
+                              <div
+                                key={`${ev.id}-${ev.occurrence_date ?? slot}`}
+                                draggable={draggable}
+                                className="calendar-event-pill"
+                                onDragStart={(e) => {
+                                  if (!draggable) return;
+                                  e.stopPropagation();
+                                  e.dataTransfer.effectAllowed = "move";
+                                  e.dataTransfer.setData("text/plain", ev.id);
+                                  setDraggingEvent(ev);
+                                }}
+                                onDragEnd={() => setDraggingEvent(null)}
+                                title={draggable ? `${ev.title} 드래그해서 날짜 이동` : ev.source === "event" ? `${ev.title} · 반복 일정은 수정 창에서 변경` : ev.title}
+                                style={{
+                                  "--event-left": continuesFromPrev ? "-11px" : "0px",
+                                  "--event-right": continuesToNext ? "-11px" : "0px",
+                                  borderTopLeftRadius: continuesFromPrev ? 0 : 5,
+                                  borderBottomLeftRadius: continuesFromPrev ? 0 : 5,
+                                  borderTopRightRadius: continuesToNext ? 0 : 5,
+                                  borderBottomRightRadius: continuesToNext ? 0 : 5,
+                                  background: eventColor(ev),
+                                  opacity: ev.source === "event" ? 0.9 : 0.55,
+                                  cursor: draggable ? "grab" : "default",
+                                  zIndex: connected ? 1 : "auto",
+                                } as CSSProperties}
+                              >
+                                {continuesFromPrev ? "" : ev.title}
+                              </div>
+                            );
+                          })}
+                          {daySlots.some((item) => item.slot >= MONTH_EVENT_SLOT_LIMIT) && (
+                            <span className="t-caption" style={{ color: "var(--fg-muted)", fontSize: 10 }}>
+                              +{daySlots.filter((item) => item.slot >= MONTH_EVENT_SLOT_LIMIT).length}
+                            </span>
+                          )}
                         </div>
-                      );})}
-                      {daySlots.some((item) => item.slot >= MONTH_EVENT_SLOT_LIMIT) && (
-                        <span className="t-caption" style={{ color: "var(--fg-muted)", fontSize: 10 }}>
-                          +{daySlots.filter((item) => item.slot >= MONTH_EVENT_SLOT_LIMIT).length}
-                        </span>
                       )}
                     </div>
-                  )}
-                </div>
-              );
-            })}
+                  );
+                })}
+              </div>
+            </div>
           </div>
         </section>
 
         {/* Right column */}
-        <div style={{ height: "100%", minHeight: 0, display: "flex", flexDirection: "column", gap: 14, overflow: "hidden" }}>
+        <div style={{ minHeight: 0, display: "flex", flexDirection: "column", gap: 14, overflow: "hidden" }}>
           {/* Selected date schedule */}
           <section className="card" style={{ padding: 16, flex: 1, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
             <div style={{ marginBottom: 10 }}>

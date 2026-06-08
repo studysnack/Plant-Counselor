@@ -512,6 +512,7 @@ Supabase 세션은 localStorage 기반이므로 `proxy.ts`에서 쿠키를 검�
 .responsive-grid-2 / 3 / 4
 .responsive-card-grid
 .calendar-layout
+.calendar-month-scroll / .calendar-month-inner / .calendar-month-grid
 .calendar-summary-grid
 .settings-layout
 .history-shell
@@ -527,6 +528,12 @@ Supabase 세션은 localStorage 기반이므로 `proxy.ts`에서 쿠키를 검�
 작은 화면에서는 `auto-fit`/media query로 카드와 2단 레이아웃이 한 컬럼으로 접힌다.
 채팅 패널은 데스크톱에서만 본문을 밀고, 좁은 화면에서는 오버레이처럼 떠서 본문 폭을
 더 줄이지 않는다.
+월간 캘린더는 좁은 화면에서 7열 구조를 유지하되 일정 제목을 색상 막대로 축약한다.
+이벤트 제목을 그대로 노출하려고 셀 폭을 강제로 늘리거나 body 가로 스크롤을 만들지
+않는다. 관련 클래스는 `calendar-month-*`와 `calendar-event-pill`을 우선 수정한다.
+월간 캘린더 카드 높이는 일정 개수에 따라 늘어날 수 있어야 하므로 `calendar-layout`에
+viewport 기준 고정 행 높이를 다시 넣거나 캘린더 카드에 `overflow: hidden`을 걸어
+마지막 주차를 자르지 않는다.
 
 앞으로 새 프론트 UI를 만들 때는 가변 UI를 기본 전제로 설계한다. 특정 해상도에서만
 맞는 정적 배치보다 `clamp()`, `min()`, `max()`, `auto-fit`, `minmax()`, `flex-wrap`,
