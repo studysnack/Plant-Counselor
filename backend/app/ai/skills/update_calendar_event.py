@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.ai.calendar_event_args import normalize_update_time_fields
 from app.ai.permissions import can_modify_calendar_event
 from app.ai.skill_base import SkillBase, SkillResult, SkillContext
 
@@ -16,9 +17,9 @@ class UpdateCalendarEventSkill(SkillBase):
             "event_id": {"type": "string", "description": "수정할 일정 ID"},
             "title": {"type": "string", "description": "새 제목 (선택)"},
             "date": {"type": "string", "description": "새 시작 날짜 YYYY-MM-DD (선택)"},
-            "time": {"type": "string", "description": "새 시작 시간 HH:MM (선택, 하루 종일이면 null 또는 생략)"},
+            "time": {"type": "string", "description": "새 시작 시간 HH:MM (선택, 지정하면 all_day=false로 처리)"},
             "end_date": {"type": "string", "description": "새 종료 날짜 YYYY-MM-DD (선택)"},
-            "end_time": {"type": "string", "description": "새 종료 시간 HH:MM (선택, 하루 종일이면 null 또는 생략)"},
+            "end_time": {"type": "string", "description": "새 종료 시간 HH:MM (선택, 시작 시간만 바꾸면 1시간 뒤로 자동 보정)"},
             "all_day": {"type": "boolean", "description": "하루 종일 일정 여부 (선택)"},
             "repeat_rule": {
                 "type": "string",
@@ -79,19 +80,10 @@ class UpdateCalendarEventSkill(SkillBase):
             current = ctx.calendar_service._repo.get(ctx.user_id, args["event_id"])
             if current is None:
                 return SkillResult(ok=False, message="일정을 찾을 수 없습니다.", error_code="not_found")
-            from datetime import date
-            start = fields.get("event_date") or date.fromisoformat(str(current.event_date)[:10])
-            end = fields.get("end_date") or date.fromisoformat(str(getattr(current, "end_date", current.event_date))[:10])
-            all_day = fields.get("all_day") if "all_day" in fields else bool(getattr(current, "all_day", True))
-            event_time = fields.get("event_time") if "event_time" in fields else (
-                str(getattr(current, "event_time", ""))[:5] if getattr(current, "event_time", None) else None
-            )
-            end_time = fields.get("end_time") if "end_time" in fields else (
-                str(getattr(current, "end_time", ""))[:5] if getattr(current, "end_time", None) else None
-            )
+            start, end, event_time, end_time, all_day = normalize_update_time_fields(fields, current)
             repeat_rule = fields.get("repeat_rule") or getattr(current, "repeat_rule", "none") or "none"
             conflicts = ctx.calendar_service.detect_conflicts(
-                ctx.user_id, start, event_time, end, end_time, bool(all_day), repeat_rule,
+                ctx.user_id, start, event_time, end, end_time, all_day, repeat_rule,
                 exclude_event_id=args["event_id"],
             )
             ev = ctx.calendar_service.update(ctx.user_id, args["event_id"], fields)

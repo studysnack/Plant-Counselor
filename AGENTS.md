@@ -568,6 +568,12 @@ viewport 기준 고정 행 높이를 다시 넣거나 캘린더 카드에 `overf
 `yearly` 중 하나다. 기존 date-only 일정은 migration 005에서 하루 종일 일정으로 유지했고,
 migration 006에서 종료 날짜와 반복 규칙을 추가했다. 프론트 일정 modal은 Apple Calendar처럼
 하루 종일 토글을 켜면 시간 입력을 숨기고, 시작/종료 날짜와 반복 선택을 함께 저장한다.
+AI의 `create_calendar_event`와 `update_calendar_event` 스킬은 LLM 인자가 조금
+불완전해도 사용자 의도에 맞게 보정한다. `time` 또는 `end_time`이 있으면 `all_day`를
+생략해도 시간 일정으로 간주하고, 종료 시간이 없으면 시작 시간 1시간 뒤를 기본값으로
+채운다. 23시 이후로 넘어가면 `end_date`도 다음 날로 보정한다. 이 규칙은
+`backend/app/ai/calendar_event_args.py`에서 공통 처리하며, 실행 전 AI 미리보기의
+충돌 감지도 같은 보정 함수를 사용해야 한다.
 
 `GET /api/v1/calendar?from=YYYY-MM-DD&to=YYYY-MM-DD`는 두 종류를 병합하고
 `source: "bud" | "event"`로 구분한다.
