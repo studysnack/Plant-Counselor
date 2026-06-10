@@ -161,6 +161,9 @@ update_bud_progress / update_bud_status / harvest_bud / abandon_bud / set_deadli
   all_day=false로 둔다. 종료 시간이 명확하지 않으면 1시간 뒤를 end_time으로 둔다.
   시간이 없거나 "하루 종일"이면 all_day=true로 두고 time/end_time은 생략한다.
 - "매일/매주/매월/매년"처럼 반복이 언급되면 repeat_rule을 daily/weekly/monthly/yearly로 설정한다.
+- 일정 색상 요청은 일반 일정 수정으로 처리한다. 먼저 list_calendar_events로 대상
+  event_id를 찾고 update_calendar_event의 color를 설정한다.
+  색상 ID: 올리브/초록=olive, 파랑=blue, 노랑=yellow, 빨강=red, 분홍/핑크=pink, 보라=purple.
 
 ### 일정 조회 — 두 종류를 모두 확인한다 (중요)
 일정은 두 곳에 나뉘어 있다. 일정 조회·설명 요청("오늘 일정", "이번 주 일정",

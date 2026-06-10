@@ -22,8 +22,8 @@ class SetDeadlineSkill(SkillBase):
         from datetime import date
 
         try:
-            d = date.fromisoformat(args["deadline"])
-        except ValueError:
+            d = date.fromisoformat(str(args["deadline"])[:10])
+        except (ValueError, TypeError):
             return SkillResult(
                 ok=False,
                 message="날짜 형식이 올바르지 않습니다. YYYY-MM-DD 형식으로 입력해주세요.",
@@ -35,6 +35,6 @@ class SetDeadlineSkill(SkillBase):
         ctx.bud_service.set_deadline(ctx.user_id, args["bud_id"], d)
         return SkillResult(
             ok=True,
-            message=f"마감일을 {args['deadline']}로 설정했습니다.",
-            data={"deadline": args["deadline"]},
+            message=f"마감일을 {d.isoformat()}로 설정했습니다.",
+            data={"deadline": d.isoformat()},
         )

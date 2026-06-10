@@ -19,9 +19,24 @@ class UpdateBudProgressSkill(SkillBase):
         _, err = guard_bud(ctx, args["bud_id"])
         if err:
             return err
-        bud = ctx.bud_service.update_progress(
-            ctx.user_id, args["bud_id"], args["progress"]
-        )
+        try:
+            progress = int(args["progress"])
+        except (TypeError, ValueError):
+            return SkillResult(
+                ok=False,
+                message="진행률은 0~100 사이 숫자로 입력해주세요.",
+                error_code="invalid_argument",
+            )
+        try:
+            bud = ctx.bud_service.update_progress(
+                ctx.user_id, args["bud_id"], progress
+            )
+        except ValueError as exc:
+            return SkillResult(
+                ok=False,
+                message=str(exc),
+                error_code="invalid_progress_update",
+            )
         if bud is None:
             return SkillResult(
                 ok=False,
@@ -33,4 +48,3 @@ class UpdateBudProgressSkill(SkillBase):
             message=f"진행률을 {bud.progress}%로 업데이트했습니다.",
             data={"progress": bud.progress, "status": bud.status},
         )
-

@@ -23,9 +23,13 @@ class CreateBudSkill(SkillBase):
             from datetime import date
 
             try:
-                deadline = date.fromisoformat(deadline)
-            except ValueError:
-                deadline = None
+                deadline = date.fromisoformat(str(deadline)[:10])
+            except (ValueError, TypeError):
+                return SkillResult(
+                    ok=False,
+                    message="날짜 형식이 올바르지 않습니다. (YYYY-MM-DD)",
+                    error_code="bad_date",
+                )
         bud = ctx.bud_service.create(
             ctx.user_id,
             args["plant_id"],
@@ -39,4 +43,3 @@ class CreateBudSkill(SkillBase):
             message=f"봉우리 '{bud.title}'를 추가했습니다.",
             data={"bud_id": bud.id},
         )
-

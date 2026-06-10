@@ -382,6 +382,12 @@ delete_calendar_event
 5. 세션별 권한이 필요하면 `backend/app/ai/permissions.py`
 6. `docs/DEMO_GUIDE.md`
 
+스킬은 LLM 인자가 완벽하다고 가정하지 않는다. 날짜는 `YYYY-MM-DDTHH:MM...`처럼
+들어와도 필요한 경우 앞 10자리 날짜로 정규화하고, 한국어 색상명처럼 사용자 자연어가
+들어올 수 있는 필드는 백엔드에서 팔레트 ID로 정규화한다. 서비스 계층의 `ValueError`
+도메인 예외는 `SkillRegistry`의 generic `internal`로 새지 않게 각 스킬에서 잡아
+사용자에게 이해 가능한 `SkillResult`로 반환한다.
+
 ### 채팅 스코프 권한
 
 | 스코프 | 허용 범위 |
@@ -560,6 +566,11 @@ viewport 기준 고정 행 높이를 다시 넣거나 캘린더 카드에 `overf
 일반 일정은 `color`에 `olive`, `blue`, `yellow`, `red`, `pink`, `purple` 중 하나를
 저장한다. 기본값은 기존 강조색과 같은 `olive`다. 프론트 일정 modal과 AI 일정 스킬은
 같은 팔레트 ID를 사용하며 임의 CSS 색상 문자열은 저장하지 않는다.
+AI 스킬 입력은 사용자 자연어 색상도 허용한다. `backend/app/calendar_colors.py`의
+`normalize_calendar_event_color()`가 초록/녹색/연두/카키/green을 `olive`,
+파랑/blue를 `blue`, 노랑/yellow/gold를 `yellow`, 빨강/red를 `red`,
+분홍/핑크/pink를 `pink`, 보라/purple/violet을 `purple`로 정규화한다. 새 색상을
+추가할 때는 프론트 팔레트, `CalendarEventColor`, alias, 문서, AI 스킬 설명을 함께 맞춘다.
 
 일반 일정은 `event_date date`, `event_time time`, `end_date date`, `end_time time`,
 `all_day boolean`, `repeat_rule text`로 시간 정보를 표현한다. `event_date`는 시작

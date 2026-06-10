@@ -27,8 +27,21 @@ class ListBudsSkill(SkillBase):
             statuses,
             args.get("type"),
         )
+        plant_names: dict[str, str] = {}
+        if ctx.plant_service:
+            plant_names = {p.id: p.name for p in ctx.plant_service.list(ctx.user_id)}
         data = [
-            {"id": b.id, "title": b.title, "status": b.status, "progress": b.progress}
+            {
+                "id": b.id,
+                "plant_id": getattr(b, "plant_id", None),
+                "plant_name": plant_names.get(getattr(b, "plant_id", None), ""),
+                "title": b.title,
+                "type": getattr(b, "type", ""),
+                "status": b.status,
+                "progress": b.progress,
+                "deadline": str(getattr(b, "deadline", ""))[:10] if getattr(b, "deadline", None) else None,
+                "detail": getattr(b, "detail", "") or "",
+            }
             for b in buds
         ]
         return SkillResult(
@@ -36,4 +49,3 @@ class ListBudsSkill(SkillBase):
             message=f"봉우리 {len(data)}개",
             data={"buds": data},
         )
-

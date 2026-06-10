@@ -5,9 +5,9 @@ from app.ai.skill_base import SkillBase, SkillResult, SkillContext
 class SuggestScopeChangeSkill(SkillBase):
     name = "suggest_scope_change"
     description = (
-        "현재 plant 또는 bud 스코프와 다른 식물에 관한 요청이 처리됐을 때 호출합니다. "
+        "현재 plant 또는 bud 스코프와 다른 식물에 관한 요청을 처리하기 전에 호출합니다. "
         "사용자에게 대화 세션을 변경할지 제안하는 UI를 표시합니다. "
-        "반드시 다른 스킬 실행을 모두 완료한 뒤 마지막으로 호출하세요. "
+        "스코프가 다른 요청에서는 create_bud/create_plant 등 변경 스킬을 실행하지 말고 이 스킬만 호출하세요. "
         "global 또는 calendar 스코프에서는 절대 호출하지 마세요."
     )
     parameters = {
