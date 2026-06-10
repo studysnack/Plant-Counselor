@@ -2,6 +2,7 @@ from __future__ import annotations
 import json
 from datetime import date
 
+from app.ai.calendar_event_args import normalize_create_time_args, normalize_update_time_fields
 from app.ai.log_recorder import LogRecorder
 from app.ai.skill_base import SkillContext
 import app.runtime_settings as rs
@@ -43,22 +44,26 @@ class ChatOrchestrator:
             if name == "create_calendar_event":
                 event_date = date.fromisoformat(str(args["date"])[:10])
                 end_date = date.fromisoformat(str(args["end_date"])[:10]) if args.get("end_date") else None
+                event_time, normalized_end_date, end_time, all_day = normalize_create_time_args(args, event_date, end_date)
                 return cal_svc.detect_conflicts(
-                    user_id, event_date, args.get("time"), end_date, args.get("end_time"),
-                    bool(args.get("all_day", True)), args.get("repeat_rule", "none"),
+                    user_id, event_date, event_time, normalized_end_date, end_time,
+                    all_day, args.get("repeat_rule", "none"),
                 )
             current = cal_svc._repo.get(user_id, args["event_id"])
             if current is None:
                 return []
-            event_date = date.fromisoformat(str(args["date"])[:10]) if args.get("date") else date.fromisoformat(str(current.event_date)[:10])
-            end_date = date.fromisoformat(str(args["end_date"])[:10]) if args.get("end_date") else date.fromisoformat(str(getattr(current, "end_date", current.event_date))[:10])
-            all_day = bool(args["all_day"]) if args.get("all_day") is not None else bool(getattr(current, "all_day", True))
-            event_time = args.get("time") if "time" in args else (
-                str(getattr(current, "event_time", ""))[:5] if getattr(current, "event_time", None) else None
-            )
-            end_time = args.get("end_time") if "end_time" in args else (
-                str(getattr(current, "end_time", ""))[:5] if getattr(current, "end_time", None) else None
-            )
+            fields: dict = {}
+            if args.get("date") is not None:
+                fields["event_date"] = date.fromisoformat(str(args["date"])[:10])
+            if args.get("end_date") is not None:
+                fields["end_date"] = date.fromisoformat(str(args["end_date"])[:10])
+            if args.get("all_day") is not None:
+                fields["all_day"] = bool(args["all_day"])
+            if "time" in args:
+                fields["event_time"] = args.get("time")
+            if "end_time" in args:
+                fields["end_time"] = args.get("end_time")
+            event_date, end_date, event_time, end_time, all_day = normalize_update_time_fields(fields, current)
             repeat_rule = args.get("repeat_rule") or getattr(current, "repeat_rule", "none") or "none"
             return cal_svc.detect_conflicts(
                 user_id, event_date, event_time, end_date, end_time, all_day, repeat_rule,

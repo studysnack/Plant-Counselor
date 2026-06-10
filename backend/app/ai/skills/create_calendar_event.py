@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.ai.calendar_event_args import normalize_create_time_args
 from app.ai.skill_base import SkillBase, SkillResult, SkillContext
 
 
@@ -14,10 +15,10 @@ class CreateCalendarEventSkill(SkillBase):
         "properties": {
             "title": {"type": "string", "description": "일정 제목"},
             "date": {"type": "string", "description": "시작 날짜 (YYYY-MM-DD)"},
-            "time": {"type": "string", "description": "시작 시간 (HH:MM, 하루 종일이면 생략)"},
+            "time": {"type": "string", "description": "시작 시간 (HH:MM, 시간이 있으면 all_day는 생략해도 시간 일정으로 처리)"},
             "end_date": {"type": "string", "description": "종료 날짜 (YYYY-MM-DD, 선택, 기본 시작 날짜)"},
-            "end_time": {"type": "string", "description": "종료 시간 (HH:MM, 하루 종일이면 생략)"},
-            "all_day": {"type": "boolean", "description": "하루 종일 일정 여부 (기본 true)"},
+            "end_time": {"type": "string", "description": "종료 시간 (HH:MM, 생략하면 시작 시간 1시간 뒤)"},
+            "all_day": {"type": "boolean", "description": "하루 종일 일정 여부 (시간이 있으면 기본 false, 시간이 없으면 기본 true)"},
             "repeat_rule": {
                 "type": "string",
                 "enum": ["none", "daily", "weekly", "monthly", "yearly"],
@@ -51,13 +52,14 @@ class CreateCalendarEventSkill(SkillBase):
             return SkillResult(ok=False, message="캘린더 서비스를 사용할 수 없습니다.", error_code="no_service")
 
         try:
+            event_time, normalized_end_date, end_time, all_day = normalize_create_time_args(args, event_date, end_date)
             conflicts = ctx.calendar_service.detect_conflicts(
                 ctx.user_id,
                 event_date,
-                args.get("time"),
-                end_date,
-                args.get("end_time"),
-                bool(args.get("all_day", True)),
+                event_time,
+                normalized_end_date,
+                end_time,
+                all_day,
                 args.get("repeat_rule", "none"),
             )
             ev = ctx.calendar_service.create(
@@ -66,10 +68,10 @@ class CreateCalendarEventSkill(SkillBase):
                 args["title"],
                 args.get("detail", ""),
                 event_date,
-                args.get("time"),
-                end_date,
-                args.get("end_time"),
-                bool(args.get("all_day", True)),
+                event_time,
+                normalized_end_date,
+                end_time,
+                all_day,
                 args.get("repeat_rule", "none"),
                 args.get("color", "olive"),
             )
