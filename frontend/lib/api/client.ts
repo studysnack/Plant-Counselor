@@ -176,7 +176,7 @@ export function streamChat(
           else if (event === "token") callbacks.onToken?.(parsed.text);
           else if (event === "tool_call") callbacks.onToolCall?.(parsed.name, parsed.args);
           else if (event === "tool_result") callbacks.onToolResult?.(parsed.name, parsed.result);
-          else if (event === "confirmation_required") callbacks.onConfirmationRequired?.(parsed.intended);
+          else if (event === "confirmation_required") callbacks.onConfirmationRequired?.(parsed);
           else if (event === "error") callbacks.onError?.(parsed.code, parsed.message);
           else if (event === "done") fireDone();
         } catch {}
