@@ -15,11 +15,13 @@ class GetStatisticsSkill(SkillBase):
     }
 
     def run(self, args: dict, ctx: SkillContext) -> SkillResult:
+        period = args.get("period", "this_month")
+        if period in ("this_month", "이번달", "이번 달"):
+            period = "month"
         stats = ctx.garden_state_service.compute_stats(
             ctx.user_id,
             args.get("scope", "global"),
             args.get("plant_id"),
-            args.get("period", "this_month"),
+            period,
         )
         return SkillResult(ok=True, message="통계 조회 완료", data=stats)
-

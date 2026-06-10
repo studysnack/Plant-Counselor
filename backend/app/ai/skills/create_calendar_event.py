@@ -29,7 +29,7 @@ class CreateCalendarEventSkill(SkillBase):
             "color": {
                 "type": "string",
                 "enum": ["olive", "blue", "yellow", "red", "pink", "purple"],
-                "description": "일정 표시 색상 (선택, 기본 olive)",
+                "description": "일정 표시 색상 (선택, 기본 olive). 한국어 요청은 올리브/초록=olive, 파랑=blue, 노랑=yellow, 빨강=red, 분홍=핑크=pink, 보라=purple로 매핑",
             },
         },
         "required": ["title", "date"],
@@ -73,7 +73,7 @@ class CreateCalendarEventSkill(SkillBase):
                 end_time,
                 all_day,
                 args.get("repeat_rule", "none"),
-                args.get("color", "olive"),
+                args.get("color") or "olive",
             )
         except ValueError as e:
             return SkillResult(ok=False, message=str(e), error_code="bad_time")

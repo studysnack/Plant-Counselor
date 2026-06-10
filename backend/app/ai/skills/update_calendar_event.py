@@ -31,7 +31,7 @@ class UpdateCalendarEventSkill(SkillBase):
             "color": {
                 "type": "string",
                 "enum": ["olive", "blue", "yellow", "red", "pink", "purple"],
-                "description": "새 표시 색상 (선택)",
+                "description": "새 표시 색상 (선택). 한국어 요청은 올리브/초록=olive, 파랑=blue, 노랑=yellow, 빨강=red, 분홍=핑크=pink, 보라=purple로 매핑",
             },
         },
         "required": ["event_id"],
